@@ -5,12 +5,12 @@
 
 from orbit.surgical.assets import ORBITSURGICAL_ASSETS_DATA_DIR
 
-from omni.isaac.lab.assets import RigidObjectCfg
-from omni.isaac.lab.sensors import FrameTransformerCfg
-from omni.isaac.lab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
-from omni.isaac.lab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
-from omni.isaac.lab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
-from omni.isaac.lab.utils import configclass
+from isaaclab.assets import RigidObjectCfg
+from isaaclab.sensors import FrameTransformerCfg
+from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
+from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
+from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
+from isaaclab.utils import configclass
 
 from orbit.surgical.tasks.surgical.lift import mdp
 from orbit.surgical.tasks.surgical.lift.lift_env_cfg import LiftEnvCfg
@@ -18,7 +18,7 @@ from orbit.surgical.tasks.surgical.lift.lift_env_cfg import LiftEnvCfg
 ##
 # Pre-defined configs
 ##
-from omni.isaac.lab.markers.config import FRAME_MARKER_CFG  # isort: skip
+from isaaclab.markers.config import FRAME_MARKER_CFG  # isort: skip
 from orbit.surgical.assets.psm import PSM_CFG  # isort: skip
 
 
@@ -42,15 +42,21 @@ class NeedleLiftEnvCfg(LiftEnvCfg):
                 "psm_tool_pitch_joint",
                 "psm_tool_yaw_joint",
             ],
-            scale=0.5,
+            # Originally set to 0.5
+            scale=0.05,
             use_default_offset=True,
         )
-        self.actions.finger_joint_pos = mdp.BinaryJointPositionActionCfg(
+        self.actions.finger_joint_pos = mdp.JointPositionActionCfg(
             asset_name="robot",
-            joint_names=["psm_tool_gripper.*_joint"],
-            open_command_expr={"psm_tool_gripper1_joint": -0.5, "psm_tool_gripper2_joint": 0.5},
-            close_command_expr={"psm_tool_gripper1_joint": -0.09, "psm_tool_gripper2_joint": 0.09},
+            joint_names=[
+                "psm_tool_gripper1_joint",
+                "psm_tool_gripper2_joint"
+            ],
+            # Originally set to 0.2
+            scale=0.2,
+            use_default_offset=True
         )
+
         # Set the body name for the end effector
         self.commands.object_pose.body_name = "psm_tool_tip_link"
 

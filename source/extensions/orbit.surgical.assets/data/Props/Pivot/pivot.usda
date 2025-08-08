@@ -1,0 +1,15 @@
+#usda 1.0
+(
+    defaultPrim = "Pivot"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+
+def Xform "Pivot" {
+    def Sphere "Visual" {
+        float radius = 0.01
+        uniform token[] xformOpOrder = ["xformOp:transform"]
+        matrix4d xformOp:transform = ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) )
+    }
+}

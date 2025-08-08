@@ -14,9 +14,9 @@ Reference: https://github.com/med-air/SurRoL
            https://github.com/WPI-AIM/dvrk_env
 """
 
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.actuators import ImplicitActuatorCfg
-from omni.isaac.lab.assets.articulation import ArticulationCfg
+import isaaclab.sim as sim_utils
+from isaaclab.actuators import ImplicitActuatorCfg
+from isaaclab.assets.articulation import ArticulationCfg
 
 from orbit.surgical.assets import ORBITSURGICAL_ASSETS_DATA_DIR
 
@@ -62,11 +62,12 @@ PSM_CFG = ArticulationCfg(
             effort_limit=12.0,
             velocity_limit=1.0,
             stiffness=800.0,
+            # Originally set to 40.0
             damping=40.0,
         ),
         "psm_tool": ImplicitActuatorCfg(
             joint_names_expr=["psm_tool_gripper.*"],
-            effort_limit=0.1,
+            effort_limit=10.0,
             velocity_limit=0.2,
             stiffness=500,
             damping=0.1,
