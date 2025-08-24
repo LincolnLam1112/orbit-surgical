@@ -9,15 +9,16 @@
 
 import argparse
 
-from omni.isaac.lab.app import AppLauncher
+from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Collect demonstrations for Isaac Lab environments.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--teleop_device", type=str, default="keyboard", help="Device for interacting with environment")
-parser.add_argument("--num_demos", type=int, default=1, help="Number of episodes to store in the dataset.")
+parser.add_argument("--num_demos", type=int, default=3, help="Number of episodes to store in the dataset.")
 parser.add_argument("--filename", type=str, default="hdf_dataset", help="Basename of output file.")
+parser.add_argument("--num_success_steps", type=int, default = 3, help = "Number of continuous steps with task success for concluding a demo as successful. Default is 10.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -28,22 +29,33 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 """Rest everything follows."""
+import time
 
 import contextlib
 import gymnasium as gym
 import os
 import torch
 
-from omni.isaac.lab.devices import Se3Keyboard, Se3SpaceMouse
-from omni.isaac.lab.managers import TerminationTermCfg as DoneTerm
-from omni.isaac.lab.utils.io import dump_pickle, dump_yaml
+from isaaclab.devices import Se3Keyboard, Se3SpaceMouse
 
-import omni.isaac.lab_tasks  # noqa: F401
-from omni.isaac.lab_tasks.utils.data_collector import RobomimicDataCollector
-from omni.isaac.lab_tasks.utils.parse_cfg import parse_env_cfg
+import isaaclab_mimic.envs  # noqa: F401
+from isaaclab_mimic.ui.instruction_display import InstructionDisplay, show_subtask_instructions
+
+from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.utils.io import dump_pickle, dump_yaml
+
+import isaaclab_tasks  # noqa: F401
+#from isaaclab_tasks.utils.data_collector import RobomimicDataCollector
+from isaaclab_tasks.utils.parse_cfg import parse_env_cfg
+
+from isaaclab.devices.openxr.retargeters.manipulator import GripperRetargeter, Se3AbsRetargeter, Se3RelRetargeter
+from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
+from isaaclab.envs.ui import EmptyWindow
+from isaaclab.managers import DatasetExportMode, ObservationTermCfg, ActionTermCfg
 
 import orbit.surgical.tasks  # noqa: F401
 from orbit.surgical.tasks.surgical.lift import mdp
+from orbit.surgical.tasks.surgical.lift.lift_env_cfg import LiftEnvCfg
 
 
 def pre_process_actions(delta_pose: torch.Tensor, gripper_command: bool) -> torch.Tensor:
@@ -79,14 +91,43 @@ def main():
     env_cfg.observations.policy.concatenate_terms = False
 
     # add termination condition for reaching the goal otherwise the environment won't reset
-    env_cfg.terminations.object_reached_goal = DoneTerm(func=mdp.object_reached_goal)
+    env_cfg.terminations.object_reached_goal = None
+
+    # specify directory for logging experiments
+    log_dir = os.path.join("./datasets", args_cli.task)
+    # dump the configuration into log-directory
+    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
+
+    # create data-collector
+    # ─── 1. Before creating `env`, configure the recorder ──────────────────────
+
+    # What we want to record
+    env_cfg = LiftEnvCfg()
+
+    filename = args_cli.filename
+    for cfg in env_cfg.recorders.values():
+        cfg.dataset_export_dir_path = log_dir
+        cfg.dataset_filename = filename
+
 
     # create environment
-    env = gym.make(args_cli.task, cfg=env_cfg)
+    env = gym.make(args_cli.task, cfg=env_cfg).unwrapped
 
-    # create controller
+    print("Recorder terms:")
+    env.recorder_manager.print_active_terms()
+
+    # filename = args_cli.filename
+
+    # env_cfg.recorders = ActionStateRecorderManagerCfg()
+    # env_cfg.recorders.dataset_export_dir_path = log_dir
+    # env_cfg.recorders.dataset_filename = filename
+    # # Only export episodes marked as successful
+    # env_cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_ALL
+
+        # create controller
     if args_cli.teleop_device.lower() == "keyboard":
-        teleop_interface = Se3Keyboard(pos_sensitivity=0.04, rot_sensitivity=0.08)
+        teleop_interface = Se3Keyboard(pos_sensitivity=0.005, rot_sensitivity=0.05)
     elif args_cli.teleop_device.lower() == "spacemouse":
         teleop_interface = Se3SpaceMouse(pos_sensitivity=0.05, rot_sensitivity=0.005)
     else:
@@ -96,80 +137,92 @@ def main():
     # print helper
     print(teleop_interface)
 
-    # specify directory for logging experiments
-    log_dir = os.path.join("./logs/robomimic", args_cli.task)
-    # dump the configuration into log-directory
-    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
-    dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
-
-    # create data-collector
-    collector_interface = RobomimicDataCollector(
-        env_name=args_cli.task,
-        directory_path=log_dir,
-        filename=args_cli.filename,
-        num_demos=args_cli.num_demos,
-        flush_freq=env.num_envs,
-        env_config={"device": args_cli.device},
-    )
-
-    # reset environment
+    # ─── 2. Initialize/reset before entering the loop ───────────────────────────
     obs_dict, _ = env.reset()
-
-    # reset interfaces
     teleop_interface.reset()
-    collector_interface.reset()
+    
+    num_demos_exported = 0
+    success_step_count = 0
+    # How many consecutive “success” steps are required to declare an episode successful
+    SUCCESS_STEPS_REQUIRED = 3 if args_cli.num_success_steps is None else args_cli.num_success_steps
 
-    # simulate environment -- run everything in inference mode
-    with contextlib.suppress(KeyboardInterrupt) and torch.inference_mode():
-        while not collector_interface.is_stopped():
-            # get keyboard command
+
+    # ─── 3. Main teleop & record loop ─────────────────────────────────────────
+    with contextlib.suppress(KeyboardInterrupt), torch.inference_mode():
+        while True:
+            # 3a. Get teleop data → pre‐process into a PyTorch action tensor
             delta_pose, gripper_command = teleop_interface.advance()
-            # convert to torch
-            delta_pose = torch.tensor(delta_pose, dtype=torch.float, device=env.device).repeat(env.num_envs, 1)
-            # compute actions based on environment
+            delta_pose = torch.tensor(delta_pose, dtype=torch.float32, device=env.device).repeat(env.num_envs, 1)
             actions = pre_process_actions(delta_pose, gripper_command)
 
-            # TODO: Deal with the case when reset is triggered by teleoperation device.
-            #   The observations need to be recollected.
-            # store signals before stepping
-            # -- obs
-            for key, value in obs_dict["policy"].items():
-                collector_interface.add(f"obs/{key}", value)
-            # -- actions
-            collector_interface.add("actions", actions)
-
-            # perform action on environment
+            # 3b. Step the environment
+            #print(env.scene["object"].data.root_pos_w[:,2])
             obs_dict, rewards, terminated, truncated, info = env.step(actions)
             dones = terminated | truncated
-            # check that simulation is stopped or not
-            if env.unwrapped.sim.is_stopped():
+
+            # 3c. Check success‐term (if defined) to accumulate “success steps”
+            success_term = DoneTerm(func=mdp.object_reached_goal)
+            
+            if success_term is not None:
+                # 'success_term.func(env, **success_term.params)` returns a tensor of shape [B] (B = num_envs)
+                success_flags = success_term.func(env)  # bool tensor
+
+                if bool(success_flags):
+                    success_step_count += 1
+                    #print(success_step_count)
+
+                # 3d. If we have enough consecutive success steps, export the episode
+                #if success_step_count >= SUCCESS_STEPS_REQUIRED:
+                    # 1) Mark it for recorder to keep
+                    #env.recorder_manager.record_pre_reset([0], force_export_or_skip=False)
+                    # 2) Flag this episode as “successful”
+                    #env.recorder_manager.set_success_to_episodes(
+                        #[0], torch.tensor([[True]], dtype=torch.bool, device=env.device)
+                    #)
+                    # 3) Actually export the HDF5 data for that episode
+                success_result = success_term.func(env, **success_term.params)
+                if success_result.any():
+                    print("Recorder manager:", env.recorder_manager)
+                    env.recorder_manager.record_pre_reset([0], force_export_or_skip=True)
+                    env.recorder_manager.set_success_to_episodes([0], torch.tensor([[True]], dtype=torch.bool, device=env.device))
+                    success = env.recorder_manager.export_episodes([0])
+                    print("Export result:", success)
+
+                    num_demos_exported += 1
+                    print(f"[Demo] Exported episode #{num_demos_exported} as successful.")
+
+                    # 3e. If we’ve reached the desired number of demos, break out
+                    if args_cli.num_demos > 0 and num_demos_exported >= args_cli.num_demos:
+                        print(f"[Demo] Recorded all {num_demos_exported} demos. Exiting.")
+                        break
+
+                    # 3f. Otherwise, force‐reset for the next demo
+                    env.sim.reset()
+                    env.recorder_manager.reset()
+                    obs_dict, _ = env.reset()
+                    teleop_interface.reset()
+                    success_step_count = 0
+                    continue
+
+
+            # 3g. If the env ended for any other reason (timeout, truncated), manually reset:
+            if dones.any():
+                env.sim.reset()
+                env.recorder_manager.reset()
+                obs_dict, _ = env.reset()
+                teleop_interface.reset()
+                success_step_count = 0
+                continue
+
+            # 3h. Otherwise, keep looping – the recorder is automatically collecting obs/actions
+
+            # 3i. Optionally, break if the simulator is stopped
+            if env.sim.is_stopped():
+                print("[Demo] Simulator stopped. Exiting.")
                 break
 
-            # robomimic only cares about policy observations
-            # store signals from the environment
-            # -- next_obs
-            for key, value in obs_dict["policy"].items():
-                collector_interface.add(f"next_obs/{key}", value)
-            # -- rewards
-            collector_interface.add("rewards", rewards)
-            # -- dones
-            collector_interface.add("dones", dones)
-
-            # -- is success label
-            collector_interface.add("success", env.termination_manager.get_term("object_reached_goal"))
-
-            # flush data from collector for successful environments
-            reset_env_ids = dones.nonzero(as_tuple=False).squeeze(-1)
-            collector_interface.flush(reset_env_ids)
-
-            # check if enough data is collected
-            if collector_interface.is_stopped():
-                break
-
-    # close the simulator
-    collector_interface.close()
+    # ─── 4. Clean up ─────────────────────────────────────────────────────────────
     env.close()
-
 
 if __name__ == "__main__":
     # run the main function

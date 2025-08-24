@@ -1,0 +1,35 @@
+[crash] Crash detected in pid 669923 thread 669923
+[crash] Crash metadata:
+[crash]  CarbSdkVersion = '179.0+release.7074.8ebfb055.gl'
+[crash]  CrashTime = 'Fri Jun 27 01:39:02 2025 GMT'
+[crash]  DumpId = '9f18f909-b739-42d9-32e590b3-da6f259f'
+[crash]  LastUploadStatus = '200'
+[crash]  ProductName = 'Omniverse Telemetry Transmitter'
+[crash]  PythonTracebackStatus = 'Directed not to include traceback'
+[crash]  RetryCount = '0'
+[crash]  StartupTime = '1750988341'
+[crash]  UploadSuccessful = '0'
+[crash]  UptimeSeconds = '1'
+[crash]  UserStory = ''
+[crash]  UserStoryStatus = 'No user story tool binary specified'
+[crash]  Version = 'undefined'
+[crash]  commandLine = '/home/<username>/miniconda3/envs/env_isaaclab/lib/python3.10/site-packages/isaacsim/extscache/omni.kit.telemetry-0.5.1+d02c707b.lx64.r.cp310/omni.telemetry.transmitter/omni.telemetry.transmitter --/telemetry/enableAnonymousAppName=[crash]  memoryStats = '(avail/total) RAM: 19.5338/31.1488GB, Swap: 7.96533/8GB, VM: 1.71799e+10/1.71799e+10GB'
+[crash]  runningInContainer = '0'
+[crash]  telemetrySessionId = '15757900782383645655'
+[crash]  terminatedByAbort = '0'
+[crash]  workingDirectory = '/home/<username>/orbit-surgical/source/standalone/workflows/rsl_rl'
+[crash]
+[crash] Crash files:
+[crash]  upload_file_minidump = './9f18f909-b739-42d9-32e590b3-da6f259f.dmp.zip'
+[crash]
+[crash] Thread 669923 backtrace follows:
+000: libc.so.6!__sigaction+0x50 (libc_sigaction.c:?)
+001: omni.telemetry.transmitter!std::vector<std::string, std::allocator<std::string> >::~vector()+0x2c (/opt/rh/devtoolset-7/root/usr/include/c++/7/bits/stl_construct.h:107)
+002: omni.telemetry.transmitter!bool valijson::ValidationVisitor<valijson::adapters::GenericRapidJsonAdapter<rapidjson::GenericValue<rapidjson::UTF8<char>, rapidjson::MemoryPoolAllocator<rapidjson::CrtAllocator> > > >::ValidatePropertySubschemas::operato003: omni.telemetry.transmitter!valijson::ValidationVisitor<valijson::adapters::GenericRapidJsonAdapter<rapidjson::GenericValue<rapidjson::UTF8<char>, rapidjson::MemoryPoolAllocator<rapidjson::CrtAllocator> > > >::visit(valijson::constraints::PropertiesC004: omni.telemetry.transmitter!valijson::ValidationVisitor<valijson::adapters::GenericRapidJsonAdapter<rapidjson::GenericValue<rapidjson::UTF8<char>, rapidjson::MemoryPoolAllocator<rapidjson::CrtAllocator> > > >::validateSchema(valijson::Subschema const005: omni.telemetry.transmitter!valijson::ValidationVisitor<valijson::adapters::GenericRapidJsonAdapter<rapidjson::GenericValue<rapidjson::UTF8<char>, rapidjson::MemoryPoolAllocator<rapidjson::CrtAllocator> > > >::ValidateSubschemas::operator()(unsigned 006: omni.telemetry.transmitter!valijson::ValidationVisitor<valijson::adapters::GenericRapidJsonAdapter<rapidjson::GenericValue<rapidjson::UTF8<char>, rapidjson::MemoryPoolAllocator<rapidjson::CrtAllocator> > > >::visit(valijson::constraints::AnyOfConstr007: omni.telemetry.transmitter!valijson::ValidationVisitor<valijson::adapters::GenericRapidJsonAdapter<rapidjson::GenericValue<rapidjson::UTF8<char>, rapidjson::MemoryPoolAllocator<rapidjson::CrtAllocator> > > >::validateSchema(valijson::Subschema const008: omni.telemetry.transmitter!bool valijson::Validator::validate<valijson::adapters::GenericRapidJsonAdapter<rapidjson::GenericValue<rapidjson::UTF8<char>, rapidjson::MemoryPoolAllocator<rapidjson::CrtAllocator> > > >(valijson::Subschema const&, valijs009: omni.telemetry.transmitter!processLogFile+0x2d26 (/builds/omniverse/carbonite/_compiler/gmake2/omni.telemetry.transmitter.core/../../../source/tools/omni.telemetry.transmitter/core/Log.cpp:784)
+010: omni.telemetry.transmitter!processLogDirectory::{lambda(carb::filesystem::DirectoryItemInfo const*, void*)#1}::_FUN(carb::filesystem::DirectoryItemInfo const*, void*)+0x11 (/builds/omniverse/carbonite/_compiler/gmake2/omni.telemetry.transmitter.core011: libcarb.so!carbGetErrorApi+0x6047 (??:?)
+012: libcarb.so!carbGetErrorApi+0x68f3 (??:?)
+013: omni.telemetry.transmitter!processLogDirectory+0x7a (/builds/omniverse/carbonite/_compiler/gmake2/omni.telemetry.transmitter.core/../../../source/tools/omni.telemetry.transmitter/core/Impl.h:614)
+014: omni.telemetry.transmitter!main+0x128d (/builds/omniverse/carbonite/_compiler/gmake2/omni.telemetry.transmitter/../../../source/tools/omni.telemetry.transmitter/main.cpp:233)
+015: libc.so.6!__libc_init_first+0x8a (./csu/../sysdeps/x86/libc-start.c:74)
+016: libc.so.6!__libc_start_main+0x8b (./csu/../csu/libc-start.c:128)
+017: omni.telemetry.transmitter!_start+0x29 (??:?)
