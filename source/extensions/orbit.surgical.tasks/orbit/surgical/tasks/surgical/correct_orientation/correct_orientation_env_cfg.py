@@ -227,6 +227,16 @@ class CurriculumCfg:
 
 
 @configclass
+class NoSlipCfg:
+    """Temporary clamp for Phase-1 nudging (prevents translational slip)."""
+    enable: bool = True                 # master toggle
+    use_hard_clamp: bool = True          # create a D6 joint (True) vs. no hard joint (False)
+    clamp_mode: str = "FREE_ANG_DAMP"    # "HINGE" | "FREE_ANG_DAMP"
+    joint_angular_damping: float = 2.0   # used when FREE_ANG_DAMP
+    hinge_axis_source: str = "needle_axis"  # "path_dir" | "needle_axis" | "world_z"
+
+
+@configclass
 class CorrOrientationEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the handover environment."""
 
@@ -241,6 +251,7 @@ class CorrOrientationEnvCfg(ManagerBasedRLEnvCfg):
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
     curriculum: CurriculumCfg = CurriculumCfg()
+    no_slip: NoSlipCfg = NoSlipCfg()
 
     def __post_init__(self):
         """Post initialization."""

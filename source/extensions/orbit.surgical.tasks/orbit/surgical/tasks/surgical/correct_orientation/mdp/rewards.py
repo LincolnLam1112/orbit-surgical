@@ -5,12 +5,23 @@ from .visualization import _contact_point_world, ee_contact_point_world, quat_to
 from .shared_phase_flags import get_mode_flags
 from .path_generator import LinearPathGenerator
 from isaacsim.core.utils.prims import delete_prim
+from .joint_utils import create_clamp_joint, destroy_clamp_joint
 
 
 def path_following_reward(env):
     # --- Generate path on first use per env ---
     needs_path = ~env.path_initialized
     N = env.num_envs
+
+    # clamp state (per-env)
+    if not hasattr(env, "_clamp_joint_handles"):
+        env._clamp_joint_handles = [None] * env.num_envs
+    if not hasattr(env, "_clamp_joint_active"):
+        env._clamp_joint_active = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    cfg_clamp = getattr(getattr(env, "cfg", None), "no_slip", None)
+    clamp_enabled = bool(cfg_clamp and cfg_clamp.enable and cfg_clamp.use_hard_clamp)
+
     device = env.device
     _ = get_mode_flags(env)
     needs_path_2 = torch.zeros(N, dtype=torch.bool, device=device)
@@ -144,6 +155,17 @@ def path_following_reward(env):
     if not hasattr(env, "mode_flags"):
         env.mode_flags = torch.zeros(N, dtype=torch.long, device=device)
 
+    # # --- Clamp lifetime rule: keep in Phase-0 and Phase-1 ---
+    # if hasattr(env, "_clamp_joint_active"):
+    #     keep_mask = (env.mode_flags == 0) | (env.mode_flags == 1)
+    #     disable_mask = torch.zeros(N, dtype=torch.bool, device=device)
+    #     if not clamp_enabled:
+    #         disable_mask = env._clamp_joint_active
+    #     to_destroy = (~keep_mask | disable_mask) & env._clamp_joint_active
+    #     if to_destroy.any():
+    #         destroy_ids = torch.nonzero(to_destroy, as_tuple=False).squeeze(-1).tolist()
+    #         destroy_clamp_joint(env, destroy_ids)
+
     # Compute Y-axis offset relative to goal
     needle_offset_y = needle_center[:, 1] - goal_point[:, 1]
 
@@ -221,6 +243,29 @@ def path_following_reward(env):
             to1 = torch.nonzero(ready_to_transition, as_tuple=False).squeeze(-1)
             # move selected envs into Phase 1
             env.mode_flags[to1] = 1
+
+            # optional clamp creation on Phase-1 entry
+            cfg_clamp = getattr(getattr(env, "cfg", None), "no_slip", None)
+            if cfg_clamp and cfg_clamp.enable and cfg_clamp.use_hard_clamp:
+                # pick the active pushing tip's contact point as the world anchor
+                # assumes you already have contact_blue/contact_yellow (Nx3) and needle_rot (Nx3x3), goal_point (Nx3)
+                anchors = torch.where(
+                    env.needle_side_flag[to1].unsqueeze(-1) == 1,
+                    contact_blue[to1],
+                    contact_yellow[to1],
+                )
+
+                # choose hinge/free-angle axis
+                if cfg_clamp.hinge_axis_source == "world_z":
+                    axes = torch.tensor([0.0, 0.0, 1.0], device=env.device).expand(anchors.shape[0], 3)
+                elif cfg_clamp.hinge_axis_source == "path_dir":
+                    axes = (goal_point[to1] - anchors)
+                    axes = axes / axes.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+                else:  # "needle_axis" (use needle's local z by convention)
+                    axes = needle_rot[to1, :, 2]  # shape (K,3)
+
+                create_clamp_joint(env, to1.tolist(), anchors, axes, cfg_clamp)
+
             if not hasattr(env, "check_reached"):
                 env.check_reached = torch.zeros(N, dtype=torch.long, device=device)
             env.check_reached[to1] = 1
@@ -383,6 +428,7 @@ def path_following_reward(env):
         # flag completion of the entire orientation phase
         if final_reached_2.any():
             to2 = active_ids_1[final_reached_2]
+            # destroy_clamp_joint(env, to2.tolist())
             if not hasattr(env, "check_orient"):
                 env.check_orient = torch.zeros(N, dtype=torch.long, device=device)
             env.check_orient[to2] = 1

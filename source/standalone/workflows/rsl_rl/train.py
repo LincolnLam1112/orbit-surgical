@@ -58,6 +58,7 @@ from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 
 import orbit.surgical.tasks  # noqa: F401
+from orbit.surgical.tasks.surgical.correct_orientation.config.needle.joint_pos_env_cfg import NeedleOrientationEnvCfg
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -72,7 +73,20 @@ def main():
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
-
+    # if isinstance(env_cfg, NeedleOrientationEnvCfg):
+    #     env_cfg.no_slip.enable = True
+    #     env_cfg.no_slip.solver_pos_iters = 24
+    #     env_cfg.no_slip.solver_vel_iters = 6
+    #     env_cfg.no_slip.needle_static_friction = 1.6
+    #     env_cfg.no_slip.needle_dynamic_friction = 1.2
+    #     env_cfg.no_slip.restitution = 0.0
+    #     env_cfg.no_slip.friction_combine = "max"
+    #     env_cfg.no_slip.contact_offset = 0.003
+    #     env_cfg.no_slip.rest_offset = 0.001
+    #     env_cfg.no_slip.jaw_stiffness = 1000.0
+    #     env_cfg.no_slip.jaw_damping = 100.0
+    #     # leave False unless you want to experiment with weld-like behaviour
+    #     env_cfg.no_slip.use_hard_clamp = False
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)

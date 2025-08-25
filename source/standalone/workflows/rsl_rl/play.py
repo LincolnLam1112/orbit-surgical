@@ -50,7 +50,7 @@ from isaaclab_rl.rsl_rl import (
 )
 
 import orbit.surgical.tasks  # noqa: F401
-
+from orbit.surgical.tasks.surgical.correct_orientation.config.needle.joint_pos_env_cfg import NeedleOrientationEnvCfg
 
 def main():
     """Play with RSL-RL agent."""
@@ -59,7 +59,20 @@ def main():
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
-
+    # if isinstance(env_cfg, NeedleOrientationEnvCfg):
+    #     env_cfg.no_slip.enable = True
+    #     env_cfg.no_slip.solver_pos_iters = 24
+    #     env_cfg.no_slip.solver_vel_iters = 6
+    #     env_cfg.no_slip.needle_static_friction = 1.6
+    #     env_cfg.no_slip.needle_dynamic_friction = 1.2
+    #     env_cfg.no_slip.restitution = 0.0
+    #     env_cfg.no_slip.friction_combine = "max"
+    #     env_cfg.no_slip.contact_offset = 0.003
+    #     env_cfg.no_slip.rest_offset = 0.001
+    #     env_cfg.no_slip.jaw_stiffness = 1000.0
+    #     env_cfg.no_slip.jaw_damping = 100.0
+    #     # leave False unless you want to experiment with weld-like behaviour
+    #     env_cfg.no_slip.use_hard_clamp = False
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg)
     # wrap around environment for rsl-rl

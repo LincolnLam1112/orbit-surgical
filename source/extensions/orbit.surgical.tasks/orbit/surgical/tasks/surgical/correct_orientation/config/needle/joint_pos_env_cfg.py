@@ -23,7 +23,7 @@ from orbit.surgical.assets.psm import PSM_CFG  # isort: skip
 class NoSlipCfg:
     """Toggleable parameters to reduce contact slip between PSM gripper and needle."""
     # master switch
-    enable: bool = False
+    enable: bool = True
 
     # solver iterations (contacts)
     solver_pos_iters: int = 24
@@ -239,55 +239,55 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
                 ),
             ],
         )
-        if self.no_slip.enable:
-            cfg = self.no_slip
+        # if self.no_slip.enable:
+        #     cfg = self.no_slip
 
-            # Update solver iterations for both robots (if available)
-            for robot in (self.scene.robot_1, self.scene.robot_2):
-                try:
-                    art_props = robot.spawn.articulation_props
-                    art_props.solver_position_iteration_count = cfg.solver_pos_iters
-                    art_props.solver_velocity_iteration_count = cfg.solver_vel_iters
-                except Exception:
-                    pass
-                # Strengthen jaw actuator if the "psm_tool" actuator exists
-                try:
-                    if "psm_tool" in robot.actuators:
-                        robot.actuators["psm_tool"].stiffness = cfg.jaw_stiffness
-                        robot.actuators["psm_tool"].damping = cfg.jaw_damping
-                except Exception:
-                    pass
+        #     # Update solver iterations for both robots (if available)
+        #     for robot in (self.scene.robot_1, self.scene.robot_2):
+        #         try:
+        #             art_props = robot.spawn.articulation_props
+        #             art_props.solver_position_iteration_count = cfg.solver_pos_iters
+        #             art_props.solver_velocity_iteration_count = cfg.solver_vel_iters
+        #         except Exception:
+        #             pass
+        #         # Strengthen jaw actuator if the "psm_tool" actuator exists
+        #         try:
+        #             if "psm_tool" in robot.actuators:
+        #                 robot.actuators["psm_tool"].stiffness = cfg.jaw_stiffness
+        #                 robot.actuators["psm_tool"].damping = cfg.jaw_damping
+        #         except Exception:
+        #             pass
 
-            # Update needle solver iterations
-            try:
-                rp = self.scene.object.spawn.rigid_props
-                rp.solver_position_iteration_count = cfg.solver_pos_iters
-                rp.solver_velocity_iteration_count = cfg.solver_vel_iters
-            except Exception:
-                pass
+        #     # Update needle solver iterations
+        #     try:
+        #         rp = self.scene.object.spawn.rigid_props
+        #         rp.solver_position_iteration_count = cfg.solver_pos_iters
+        #         rp.solver_velocity_iteration_count = cfg.solver_vel_iters
+        #     except Exception:
+        #         pass
 
-            # Apply friction and restitution to the needle
-            try:
-                self.scene.object.spawn.material = sim_utils.PhysicsMaterialCfg(
-                    static_friction=cfg.needle_static_friction,
-                    dynamic_friction=cfg.needle_dynamic_friction,
-                    restitution=cfg.restitution,
-                    friction_combine_mode=cfg.friction_combine,
-                )
-            except Exception:
-                pass
+        #     # Apply friction and restitution to the needle
+        #     try:
+        #         self.scene.object.spawn.material = sim_utils.PhysicsMaterialCfg(
+        #             static_friction=cfg.needle_static_friction,
+        #             dynamic_friction=cfg.needle_dynamic_friction,
+        #             restitution=cfg.restitution,
+        #             friction_combine_mode=cfg.friction_combine,
+        #         )
+        #     except Exception:
+        #         pass
 
-            # Apply contact/rest offsets via collision props
-            try:
-                self.scene.object.spawn.collision_props = sim_utils.CollisionPropertiesCfg(
-                    contact_offset=cfg.contact_offset,
-                    rest_offset=cfg.rest_offset,
-                )
-            except Exception:
-                pass
+        #     # Apply contact/rest offsets via collision props
+        #     try:
+        #         self.scene.object.spawn.collision_props = sim_utils.CollisionPropertiesCfg(
+        #             contact_offset=cfg.contact_offset,
+        #             rest_offset=cfg.rest_offset,
+        #         )
+        #     except Exception:
+        #         pass
 
-            # Mark if we want to use a hard clamp (controller handles actual weld)
-            self.use_hard_clamp = cfg.use_hard_clamp
+        #     # Mark if we want to use a hard clamp (controller handles actual weld)
+        #     self.use_hard_clamp = cfg.use_hard_clamp
             
 
 @configclass

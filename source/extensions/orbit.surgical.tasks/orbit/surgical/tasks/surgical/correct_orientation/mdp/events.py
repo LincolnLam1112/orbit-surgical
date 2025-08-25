@@ -4,6 +4,7 @@ from typing import Optional
 from .shared_phase_flags import get_mode_flags
 from .visualization import _contact_point_world, ee_contact_point_world, quat_to_rot_matrix, visualize_reference_path
 from .path_generator import LinearPathGenerator
+from .joint_utils import destroy_clamp_joint
 
 
 def _active_ids(env, env_ids):
@@ -256,6 +257,12 @@ def reset_mode_flags(env, env_ids: torch.Tensor | None = None):
     device = env.device
     ids = _active_ids(env, env_ids)
     N = ids.numel()
+
+
+    # Ensure temporary clamps are removed on reset
+    # if hasattr(env, "_clamp_joint_active"):
+    #     # destroy for all requested env_ids
+    #     destroy_clamp_joint(env, env_ids.tolist() if hasattr(env_ids, "tolist") else list(env_ids))
 
     if not hasattr(env, "mode_flags"):
         get_mode_flags(env)  # create if not exists
