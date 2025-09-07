@@ -50,7 +50,6 @@ from isaaclab_rl.rsl_rl import (
 )
 
 import orbit.surgical.tasks  # noqa: F401
-from orbit.surgical.tasks.surgical.correct_orientation.config.needle.joint_pos_env_cfg import NeedleOrientationEnvCfg
 
 def main():
     """Play with RSL-RL agent."""
@@ -59,20 +58,6 @@ def main():
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
-    # if isinstance(env_cfg, NeedleOrientationEnvCfg):
-    #     env_cfg.no_slip.enable = True
-    #     env_cfg.no_slip.solver_pos_iters = 24
-    #     env_cfg.no_slip.solver_vel_iters = 6
-    #     env_cfg.no_slip.needle_static_friction = 1.6
-    #     env_cfg.no_slip.needle_dynamic_friction = 1.2
-    #     env_cfg.no_slip.restitution = 0.0
-    #     env_cfg.no_slip.friction_combine = "max"
-    #     env_cfg.no_slip.contact_offset = 0.003
-    #     env_cfg.no_slip.rest_offset = 0.001
-    #     env_cfg.no_slip.jaw_stiffness = 1000.0
-    #     env_cfg.no_slip.jaw_damping = 100.0
-    #     # leave False unless you want to experiment with weld-like behaviour
-    #     env_cfg.no_slip.use_hard_clamp = False
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg)
     # wrap around environment for rsl-rl
@@ -102,15 +87,79 @@ def main():
 
     # reset environment
     obs, _ = env.get_observations()
+
+    # --- smoothing state (persistent across steps) ---
+    _sm_prev = None        # low-pass internal state
+    _sm_last = None        # last output after slew-limit
+    _sm_repeat = None      # per-env repeat counter
+
+    # knobs (tweak these to feel the effect)
+    ALPHA = 1.0           # closer to 0 = heavier smoothing
+    REPEAT = 1             # 1 = no repeat; 2+ = hold output for k-1 steps
+    SLEW  = 0.15           # per-dim max delta per step; 0 disables
+
+    step_i = 0
+
     # simulate environment
     while simulation_app.is_running():
-        # run everything in inference mode
         with torch.inference_mode():
-            # agent stepping
-            actions = policy(obs)
-            # env stepping
-            obs, _, _, _ = env.step(actions)
-            # print(obs)
+            # agent stepping (policy is already deterministic in get_inference_policy)
+            actions = policy(obs)  # shape: [num_envs, act_dim], on the right device
+
+            # --- PRE-STEP SMOOTHING (runs every control step) ---
+            if _sm_prev is None:
+                # first step init
+                _sm_prev   = actions.clone()
+                _sm_last   = actions.clone()
+                _sm_repeat = torch.zeros(actions.shape[0], dtype=torch.long, device=actions.device)
+
+            # choose which envs recompute a new command this step
+            recompute = (_sm_repeat == 0)
+            if recompute.any():
+                idx = torch.nonzero(recompute, as_tuple=False).squeeze(-1)
+                prev = _sm_prev[idx]
+
+                # low-pass: ā_t = α a_t + (1-α) ā_{t-1}
+                new_smooth = ALPHA * actions[idx] + (1.0 - ALPHA) * prev
+
+                # slew-rate limit (per-dim clamp on change from last output)
+                if SLEW > 0.0:
+                    delta = (new_smooth - _sm_last[idx]).clamp(-SLEW, SLEW)
+                    out = _sm_last[idx] + delta
+                else:
+                    out = new_smooth
+
+                # update internal states
+                _sm_prev[idx] = new_smooth
+                _sm_last[idx] = out
+
+            # action repeat bookkeeping
+            hold = ~recompute
+            _sm_repeat[recompute] = REPEAT - 1
+            _sm_repeat[hold] = torch.clamp(_sm_repeat[hold] - 1, min=0)
+
+            smoothed_actions = _sm_last
+
+            # (optional) light debug to confirm it’s running every step
+            if step_i % 200 == 0:
+                i = 0  # first env
+                # print("[smooth] raw[0]:", actions[i].detach().cpu().numpy(), " -> smoothed[0]:", smoothed_actions[i].detach().cpu().numpy())
+
+            # env stepping WITH SMOOTHED ACTIONS
+            obs, _, _, _ = env.step(smoothed_actions)
+
+            step_i += 1
+
+    # # reset environment
+    # obs, _ = env.get_observations()
+    # # simulate environment
+    # while simulation_app.is_running():
+    #     # run everything in inference mode
+    #     with torch.inference_mode():
+    #         # agent stepping
+    #         actions = policy(obs)
+    #         # env stepping
+    #         obs, _, _, _ = env.step(actions)
 
     # close the simulator
     env.close()

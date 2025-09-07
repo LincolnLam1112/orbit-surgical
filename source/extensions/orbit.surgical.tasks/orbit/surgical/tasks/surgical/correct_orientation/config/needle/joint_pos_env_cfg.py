@@ -18,38 +18,8 @@ from orbit.surgical.tasks.surgical.correct_orientation.correct_orientation_env_c
 from isaaclab.markers.config import FRAME_MARKER_CFG  # isort: skip
 from orbit.surgical.assets.psm import PSM_CFG  # isort: skip
 
-
-@configclass
-class NoSlipCfg:
-    """Toggleable parameters to reduce contact slip between PSM gripper and needle."""
-    # master switch
-    enable: bool = True
-
-    # solver iterations (contacts)
-    solver_pos_iters: int = 24
-    solver_vel_iters: int = 6
-
-    # friction on the needle (tip friction requires USD material on tips; start with needle only)
-    needle_static_friction: float = 1.4
-    needle_dynamic_friction: float = 1.1
-    restitution: float = 0.0
-    friction_combine: str = "max"
-
-    # contact generation depths
-    contact_offset: float = 0.003
-    rest_offset: float = 0.001
-
-    # gripper jaw gains when clamping
-    jaw_stiffness: float = 1000.0
-    jaw_damping: float = 100.0
-
-    # optional: let controller weld tip↔needle in Phase 1 (handled elsewhere)
-    use_hard_clamp: bool = False
-
-
 @configclass
 class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
-    no_slip: NoSlipCfg = NoSlipCfg()
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
@@ -239,56 +209,7 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
                 ),
             ],
         )
-        # if self.no_slip.enable:
-        #     cfg = self.no_slip
 
-        #     # Update solver iterations for both robots (if available)
-        #     for robot in (self.scene.robot_1, self.scene.robot_2):
-        #         try:
-        #             art_props = robot.spawn.articulation_props
-        #             art_props.solver_position_iteration_count = cfg.solver_pos_iters
-        #             art_props.solver_velocity_iteration_count = cfg.solver_vel_iters
-        #         except Exception:
-        #             pass
-        #         # Strengthen jaw actuator if the "psm_tool" actuator exists
-        #         try:
-        #             if "psm_tool" in robot.actuators:
-        #                 robot.actuators["psm_tool"].stiffness = cfg.jaw_stiffness
-        #                 robot.actuators["psm_tool"].damping = cfg.jaw_damping
-        #         except Exception:
-        #             pass
-
-        #     # Update needle solver iterations
-        #     try:
-        #         rp = self.scene.object.spawn.rigid_props
-        #         rp.solver_position_iteration_count = cfg.solver_pos_iters
-        #         rp.solver_velocity_iteration_count = cfg.solver_vel_iters
-        #     except Exception:
-        #         pass
-
-        #     # Apply friction and restitution to the needle
-        #     try:
-        #         self.scene.object.spawn.material = sim_utils.PhysicsMaterialCfg(
-        #             static_friction=cfg.needle_static_friction,
-        #             dynamic_friction=cfg.needle_dynamic_friction,
-        #             restitution=cfg.restitution,
-        #             friction_combine_mode=cfg.friction_combine,
-        #         )
-        #     except Exception:
-        #         pass
-
-        #     # Apply contact/rest offsets via collision props
-        #     try:
-        #         self.scene.object.spawn.collision_props = sim_utils.CollisionPropertiesCfg(
-        #             contact_offset=cfg.contact_offset,
-        #             rest_offset=cfg.rest_offset,
-        #         )
-        #     except Exception:
-        #         pass
-
-        #     # Mark if we want to use a hard clamp (controller handles actual weld)
-        #     self.use_hard_clamp = cfg.use_hard_clamp
-            
 
 @configclass
 class NeedleOrientationEnvCfg_PLAY(CorrOrientationEnvCfg):

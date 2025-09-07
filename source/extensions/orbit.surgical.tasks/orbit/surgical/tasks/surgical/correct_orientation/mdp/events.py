@@ -192,7 +192,7 @@ def reset_needle_about_pivot_xz(env, env_ids: Optional[torch.Tensor] = None) -> 
     x_deg = torch.empty(0, device=device)
     while z_deg.numel() < N or x_deg.numel() < N:
         z_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)  # Z first
-        x_deg = torch.empty(N, device=device).uniform_(-45.0, 45.0)  # X second
+        x_deg = torch.empty(N, device=device).uniform_(-40.0, 40.0)  # X second
     z_deg = z_deg[:N]
     x_deg = x_deg[:N]
     z_half = torch.deg2rad(z_deg) * 0.5
@@ -258,7 +258,6 @@ def reset_mode_flags(env, env_ids: torch.Tensor | None = None):
     ids = _active_ids(env, env_ids)
     N = ids.numel()
 
-
     # Ensure temporary clamps are removed on reset
     # if hasattr(env, "_clamp_joint_active"):
     #     # destroy for all requested env_ids
@@ -271,40 +270,35 @@ def reset_mode_flags(env, env_ids: torch.Tensor | None = None):
         env.check_reached = torch.zeros(N, dtype=torch.long, device=device)
     else:
         # Reset only the relevant envs
-        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
         env.check_reached[ids] = 0
     if not hasattr(env, "check_orient"):
         env.check_orient = torch.zeros(N, dtype=torch.long, device=device)
     else:
         # Reset only the relevant envs
-        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
         env.check_orient[ids] = 0
     if not hasattr(env, "path_initialized"):
         env.path_initialized = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     else:
         # Reset only the relevant envs
-        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
         env.path_initialized[ids] = False
 
     if not hasattr(env, "path_initialized_2"):
         env.path_initialized_2 = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     else:
         # Reset only the relevant envs
-        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
         env.path_initialized_2[ids] = False
     if not hasattr(env, "current_path_index"):
         env.current_path_index = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
     else:
         # Reset only the relevant envs
-        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
         env.current_path_index[ids] = 0
     if not hasattr(env, "current_path_index_2"):
         env.current_path_index_2 = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
     else:
         # Reset only the relevant envs
-        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
         env.current_path_index_2[ids] = 0
-    # ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
+
+
     # if not hasattr(env, "reference_path"):
     #     env.reference_path = torch.zeros((env.num_envs, 10, 3), device=env.device)
     #     env.reference_path_blue = torch.zeros((env.num_envs, 10, 3), device=env.device)
@@ -315,6 +309,7 @@ def reset_mode_flags(env, env_ids: torch.Tensor | None = None):
     #         env.reference_path_blue[ids] = 0
     #     if hasattr(env, "reference_path_yellow"):
     #         env.reference_path_yellow[ids] = 0
+
     if not hasattr(env, "reference_path_2"):
         env.reference_path_2 = torch.zeros((env.num_envs, 3, 3), device=env.device)
     else:
@@ -323,16 +318,20 @@ def reset_mode_flags(env, env_ids: torch.Tensor | None = None):
         env.align_counter = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
     else:
         # Reset only the relevant envs
-        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
         env.align_counter[ids] = 0
-    if not hasattr(env, "phase0_hold_count"):
-        env.phase0_hold_count = torch.zeros(N, dtype=torch.long, device=device)
+    if not hasattr(env, "phase1_tip_hold"):
+        env.phase1_tip_hold = torch.zeros(N, dtype=torch.long, device=device)
     else:
         # Reset only the relevant envs
-        ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
-        env.phase0_hold_count[ids] = 0
+        env.phase1_tip_hold[ids] = 0
 
     if env_ids is None:
         env.mode_flags[:] = 0  # reset all to stage 0
     else:
         env.mode_flags[env_ids] = 0  # reset only specific environments
+    q = env.scene["robot_1"].data.joint_pos
+
+    if not hasattr(env, "_prev_q"):
+        env._prev_q = q.clone()
+    else:
+        env._prev_q[ids] = q[ids].clone()

@@ -11,9 +11,4 @@ class PhasedOrientationCMORewardWrapper:
         self.robot_cfg = robot_cfg
 
     def __call__(self, env):
-        reward = path_following_reward(env)
-        
-        # # Make cost available to runner
-        # env.extras["costs"] = cost
-
-        return reward
+        return path_following_reward(env)
