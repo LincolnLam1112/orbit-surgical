@@ -357,70 +357,72 @@ def visualize_needle_fixed_contact_relative(env, env_ids=None):
     )
 
 
-def visualize_reference_path(env):
+def visualize_reference_path(env, env_ids=None):
     if not hasattr(env, "reference_path"):
-        print("No reference_path found")
         return
-
+    M = env.num_envs
     device = env.device
-    path = env.reference_path[0]         # (10, 3) for center
-    path_blue = env.reference_path_blue[0]   # (10, 3)
-    path_yellow = env.reference_path_yellow[0]  # (10, 3)
+    base_ns = getattr(env.scene, "env_ns", "/World/envs/env")
 
-    for i in range(10):
-        # Center path (greenish)
-        cfg_center = VisualizationMarkersCfg(
-            prim_path=f"/Visuals/PathDotStep_center_{i}",
-            markers={
-                "sphere": sim_utils.SphereCfg(
-                    radius=0.0005,
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.2, 0.8 - i * 0.05, 0.2 + i * 0.05)
-                    )
-                )
-            }
-        )
-        marker_center = VisualizationMarkers(cfg_center)
-        marker_center.visualize(
-            marker_indices=torch.zeros(1, dtype=torch.long),
-            translations=path[i].cpu().unsqueeze(0).numpy()
-        )
+    if env_ids is None:
+        env_ids = range(M)
 
-        # Blue tip path (blueish)
-        cfg_blue = VisualizationMarkersCfg(
-            prim_path=f"/Visuals/PathDotStep_blue_{i}",
-            markers={
-                "sphere": sim_utils.SphereCfg(
-                    radius=0.0005,
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.2, 0.3 + i * 0.05, 0.9)
-                    )
-                )
-            }
-        )
-        marker_blue = VisualizationMarkers(cfg_blue)
-        marker_blue.visualize(
-            marker_indices=torch.zeros(1, dtype=torch.long),
-            translations=path_blue[i].cpu().unsqueeze(0).numpy()
-        )
+    for eid in env_ids:
+        path        = env.reference_path[eid]        # (10,3)
+        path_blue   = env.reference_path_blue[eid]
+        path_yellow = env.reference_path_yellow[eid]
 
-        # Yellow tip path (yellow-orange)
-        cfg_yellow = VisualizationMarkersCfg(
-            prim_path=f"/Visuals/PathDotStep_yellow_{i}",
-            markers={
-                "sphere": sim_utils.SphereCfg(
-                    radius=0.0005,
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(1.0, 0.8 - i * 0.05, 0.1 + i * 0.05)
+        for i in range(10):
+            # Center (greenish)
+            cfg_center = VisualizationMarkersCfg(
+                prim_path=f"{base_ns}_{eid}/Visuals/PathDotStep_center_{i}",
+                markers={
+                    "sphere": sim_utils.SphereCfg(
+                        radius=0.0005,
+                        visual_material=sim_utils.PreviewSurfaceCfg(
+                            diffuse_color=(0.2, 0.8 - i * 0.05, 0.2 + i * 0.05)
+                        )
                     )
-                )
-            }
-        )
-        marker_yellow = VisualizationMarkers(cfg_yellow)
-        marker_yellow.visualize(
-            marker_indices=torch.zeros(1, dtype=torch.long),
-            translations=path_yellow[i].cpu().unsqueeze(0).numpy()
-        )
+                }
+            )
+            VisualizationMarkers(cfg_center).visualize(
+                marker_indices=torch.zeros(1, dtype=torch.long),
+                translations=path[i].detach().cpu().unsqueeze(0).numpy(),
+            )
+
+            # Blue
+            cfg_blue = VisualizationMarkersCfg(
+                prim_path=f"{base_ns}_{eid}/Visuals/PathDotStep_blue_{i}",
+                markers={
+                    "sphere": sim_utils.SphereCfg(
+                        radius=0.0005,
+                        visual_material=sim_utils.PreviewSurfaceCfg(
+                            diffuse_color=(0.2, 0.3 + i * 0.05, 0.9)
+                        )
+                    )
+                }
+            )
+            VisualizationMarkers(cfg_blue).visualize(
+                marker_indices=torch.zeros(1, dtype=torch.long),
+                translations=path_blue[i].detach().cpu().unsqueeze(0).numpy(),
+            )
+
+            # Yellow
+            cfg_yellow = VisualizationMarkersCfg(
+                prim_path=f"{base_ns}_{eid}/Visuals/PathDotStep_yellow_{i}",
+                markers={
+                    "sphere": sim_utils.SphereCfg(
+                        radius=0.0005,
+                        visual_material=sim_utils.PreviewSurfaceCfg(
+                            diffuse_color=(1.0, 0.8 - i * 0.05, 0.1 + i * 0.05)
+                        )
+                    )
+                }
+            )
+            VisualizationMarkers(cfg_yellow).visualize(
+                marker_indices=torch.zeros(1, dtype=torch.long),
+                translations=path_yellow[i].detach().cpu().unsqueeze(0).numpy(),
+            )
 
 
 # Define separate marker configs

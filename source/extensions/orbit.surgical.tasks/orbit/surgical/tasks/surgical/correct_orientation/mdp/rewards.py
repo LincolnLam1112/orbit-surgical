@@ -63,13 +63,30 @@ def path_following_reward(env):
         env.current_path_index[needs_path] = 0
         env.path_initialized[needs_path] = True
 
-        # for i in range(10):
-        #     delete_prim(f"/Visuals/PathDotStep_center_{i}")
-        #     delete_prim(f"/Visuals/PathDotStep_blue_{i}")
-        #     delete_prim(f"/Visuals/PathDotStep_yellow_{i}")
+        # # Allocate once for ALL envs (not the masked count N)
+        # if not hasattr(env, "reference_path"):
+        #     M = env.num_envs
+        #     env.reference_path        = torch.zeros((M, 10, 3), device=device)
+        #     env.reference_path_blue   = torch.zeros((M, 10, 3), device=device)
+        #     env.reference_path_yellow = torch.zeros((M, 10, 3), device=device)
+        # if not hasattr(env, "current_path_index"):
+        #     env.current_path_index = torch.zeros(env.num_envs, dtype=torch.long, device=device)
+        # if not hasattr(env, "path_initialized"):
+        #     env.path_initialized = torch.zeros(env.num_envs, dtype=torch.bool, device=device)
 
+        # # ... after assigning env.reference_path[...] = new_paths, etc.
 
-        # visualize_reference_path(env)
+        # # Delete old markers per-env that just got (re)generated
+        # base_ns = getattr(env.scene, "env_ns", "/World/envs/env")
+        # eids = torch.nonzero(needs_path, as_tuple=False).squeeze(-1).tolist()
+        # for eid in eids:
+        #     for i in range(10):
+        #         delete_prim(f"{base_ns}_{eid}/Visuals/PathDotStep_center_{i}")
+        #         delete_prim(f"{base_ns}_{eid}/Visuals/PathDotStep_blue_{i}")
+        #         delete_prim(f"{base_ns}_{eid}/Visuals/PathDotStep_yellow_{i}")
+
+        # # Draw for all envs (or just eids) after updates:
+        # visualize_reference_path(env, env_ids=eids if len(eids) > 0 else None)
 
     # --- Get current targets ---
     idx = torch.clamp(env.current_path_index, max=9)
@@ -197,167 +214,167 @@ def path_following_reward(env):
         # reward[active_ids_0] += 8.0 * (yaw0_reward * gate.float())
 
        # — one‑time “huge” bonus for exactly those envs that just unlocked Phase 1 —
-        if final_step.any():
-            to1 = active_ids_0[final_step]
-            env.mode_flags[to1] = 1      # then move them into Phase 1
-            if not hasattr(env, "check_reached"):
-                env.check_reached = torch.zeros(N, dtype=torch.long, device=device)
-            env.check_reached[to1] = 1
+    #     if final_step.any():
+    #         to1 = active_ids_0[final_step]
+    #         env.mode_flags[to1] = 1      # then move them into Phase 1
+    #         if not hasattr(env, "check_reached"):
+    #             env.check_reached = torch.zeros(N, dtype=torch.long, device=device)
+    #         env.check_reached[to1] = 1
 
-       # print(env.current_path_index, live_align, live_center_dist, live_blue_dist, live_yellow_dist, reward)
-       # print(final_reached, live_align, live_center_dist, live_blue_dist, live_yellow_dist)
+    #    # print(env.current_path_index, live_align, live_center_dist, live_blue_dist, live_yellow_dist, reward)
+    #    # print(final_reached, live_align, live_center_dist, live_blue_dist, live_yellow_dist)
 
-    # --- Phase 1 logic ---
-    if mode_1.any():
-        active_ids_1 = env_ids[mode_1]
+    # # --- Phase 1 logic ---
+    # if mode_1.any():
+    #     active_ids_1 = env_ids[mode_1]
 
-        side_flag = env.needle_side_flag
+    #     side_flag = env.needle_side_flag
 
-        if needs_path_2.any():
-            env.path_generator_2 = getattr(env, "path_generator_2", LinearPathGenerator(num_steps=3))
+    #     if needs_path_2.any():
+    #         env.path_generator_2 = getattr(env, "path_generator_2", LinearPathGenerator(num_steps=3))
 
-            left_need = needs_path_2 & (side_flag == 1)
-            right_need = needs_path_2 & (side_flag == -1)
+    #         left_need = needs_path_2 & (side_flag == 1)
+    #         right_need = needs_path_2 & (side_flag == -1)
 
-            # --- Ensure secondary path buffers exist ---
-            if not hasattr(env, "reference_path_2"):
-                env.reference_path_2 = torch.zeros((N, 3, 3), device=device)  # 3 steps default
-            if not hasattr(env, "current_path_index_2"):
-                env.current_path_index_2 = torch.zeros(N, dtype=torch.long, device=device)
-            if not hasattr(env, "path_initialized_2"):
-                env.path_initialized_2 = torch.zeros(N, dtype=torch.bool, device=device)
+    #         # --- Ensure secondary path buffers exist ---
+    #         if not hasattr(env, "reference_path_2"):
+    #             env.reference_path_2 = torch.zeros((N, 3, 3), device=device)  # 3 steps default
+    #         if not hasattr(env, "current_path_index_2"):
+    #             env.current_path_index_2 = torch.zeros(N, dtype=torch.long, device=device)
+    #         if not hasattr(env, "path_initialized_2"):
+    #             env.path_initialized_2 = torch.zeros(N, dtype=torch.bool, device=device)
 
-            if left_need.any():
-                left_indices = torch.nonzero(left_need, as_tuple=False).squeeze(-1)  # global IDs
-                new_paths_left = env.path_generator_2.generate(contact_blue[left_indices], goal_point[left_indices])
-                env.reference_path_2[left_indices] = new_paths_left
-                env.current_path_index_2[left_indices] = 0
-                env.path_initialized_2[left_indices] = True
+    #         if left_need.any():
+    #             left_indices = torch.nonzero(left_need, as_tuple=False).squeeze(-1)  # global IDs
+    #             new_paths_left = env.path_generator_2.generate(contact_blue[left_indices], goal_point[left_indices])
+    #             env.reference_path_2[left_indices] = new_paths_left
+    #             env.current_path_index_2[left_indices] = 0
+    #             env.path_initialized_2[left_indices] = True
 
-            if right_need.any():
-                right_indices = torch.nonzero(right_need, as_tuple=False).squeeze(-1)  # global IDs
-                new_paths_right = env.path_generator_2.generate(contact_yellow[right_indices], goal_point[right_indices])
-                env.reference_path_2[right_indices] = new_paths_right
-                env.current_path_index_2[right_indices] = 0
-                env.path_initialized_2[right_indices] = True
-
-
-            # for i in range(3):
-            #     delete_prim(f"/Visuals/PathDotStep_orient_{i}")
+    #         if right_need.any():
+    #             right_indices = torch.nonzero(right_need, as_tuple=False).squeeze(-1)  # global IDs
+    #             new_paths_right = env.path_generator_2.generate(contact_yellow[right_indices], goal_point[right_indices])
+    #             env.reference_path_2[right_indices] = new_paths_right
+    #             env.current_path_index_2[right_indices] = 0
+    #             env.path_initialized_2[right_indices] = True
 
 
-            # visualize_reference_path_2(env)
+    #         # for i in range(3):
+    #         #     delete_prim(f"/Visuals/PathDotStep_orient_{i}")
 
-        # then use active_ids normally
-        idx_2 = torch.clamp(env.current_path_index_2, max=2)
-        ref_center_2 = env.reference_path_2[torch.arange(N), idx_2]
 
-        # --- Correct pushing tip (decided by needle_side_flag) ---
-        left_tip_dist_to_path = torch.norm(blue_tip - ref_center_2, dim=1)[active_ids_1]
-        right_tip_dist_to_path = torch.norm(yellow_tip - ref_center_2, dim=1)[active_ids_1]
-        needle_dist_to_path = torch.norm(needle_center - ref_center_2, dim=1)[active_ids_1]
-        pushing_left_mask = (env.needle_side_flag[active_ids_1] == 1)
-        tip_dist_to_path = torch.where(
-            pushing_left_mask,
-            left_tip_dist_to_path,
-            right_tip_dist_to_path
-        )
+    #         # visualize_reference_path_2(env)
 
-        # center_close = goal_dist_center < 0.003
-        tip_close = (tip_dist_to_path < 0.005)
-        advance_2 = tip_close
+    #     # then use active_ids normally
+    #     idx_2 = torch.clamp(env.current_path_index_2, max=2)
+    #     ref_center_2 = env.reference_path_2[torch.arange(N), idx_2]
 
-        # --- Path index increment ---
-        max_step_2 = env.reference_path_2.shape[1] - 1
-        env.current_path_index_2[active_ids_1] = torch.minimum(
-            env.current_path_index_2[active_ids_1] + advance_2.long(),
-            torch.full_like(env.current_path_index_2[active_ids_1], max_step_2)
-        )
+    #     # --- Correct pushing tip (decided by needle_side_flag) ---
+    #     left_tip_dist_to_path = torch.norm(blue_tip - ref_center_2, dim=1)[active_ids_1]
+    #     right_tip_dist_to_path = torch.norm(yellow_tip - ref_center_2, dim=1)[active_ids_1]
+    #     needle_dist_to_path = torch.norm(needle_center - ref_center_2, dim=1)[active_ids_1]
+    #     pushing_left_mask = (env.needle_side_flag[active_ids_1] == 1)
+    #     tip_dist_to_path = torch.where(
+    #         pushing_left_mask,
+    #         left_tip_dist_to_path,
+    #         right_tip_dist_to_path
+    #     )
 
-        # --- Phase 1 reward shaping ---
-        # 1) Alignment Reward
-        blue_align = torch.exp(-live_blue_dist[active_ids_1] / 0.01)
-        yellow_align = torch.exp(-live_yellow_dist[active_ids_1] / 0.01)
+    #     # center_close = goal_dist_center < 0.003
+    #     tip_close = (tip_dist_to_path < 0.005)
+    #     advance_2 = tip_close
 
-        alignment_reward = 12.0 * blue_align + 12.0 * yellow_align
+    #     # --- Path index increment ---
+    #     max_step_2 = env.reference_path_2.shape[1] - 1
+    #     env.current_path_index_2[active_ids_1] = torch.minimum(
+    #         env.current_path_index_2[active_ids_1] + advance_2.long(),
+    #         torch.full_like(env.current_path_index_2[active_ids_1], max_step_2)
+    #     )
 
-        alignment_reward_2 = torch.where(
-            pushing_left_mask,
-            10.0 * yellow_align,  # left: blue primary
-            10.0 * blue_align  # right: yellow primary
-        )
+    #     # --- Phase 1 reward shaping ---
+    #     # 1) Alignment Reward
+    #     blue_align = torch.exp(-live_blue_dist[active_ids_1] / 0.01)
+    #     yellow_align = torch.exp(-live_yellow_dist[active_ids_1] / 0.01)
 
-        center_align = torch.exp(-live_center_dist[active_ids_1] / 0.01)
+    #     alignment_reward = 12.0 * blue_align + 12.0 * yellow_align
 
-        blue_to_center = torch.norm(blue_tip - needle_center, dim=1)
-        yellow_to_center = torch.norm(yellow_tip - needle_center, dim=1)
+    #     alignment_reward_2 = torch.where(
+    #         pushing_left_mask,
+    #         10.0 * yellow_align,  # left: blue primary
+    #         10.0 * blue_align  # right: yellow primary
+    #     )
 
-        blue_center_align = torch.exp(-blue_to_center[active_ids_1] / 0.01)
-        yellow_center_align = torch.exp(-yellow_to_center[active_ids_1] / 0.01)
+    #     center_align = torch.exp(-live_center_dist[active_ids_1] / 0.01)
 
-        tip_close_center = torch.where(
-            pushing_left_mask,
-            5.0 * blue_center_align * live_align[active_ids_1].float(),
-            5.0 * yellow_center_align * live_align[active_ids_1].float()
-        )
+    #     blue_to_center = torch.norm(blue_tip - needle_center, dim=1)
+    #     yellow_to_center = torch.norm(yellow_tip - needle_center, dim=1)
 
-        reward[active_ids_1] += 15.0 * center_align
-        reward[active_ids_1] += alignment_reward
+    #     blue_center_align = torch.exp(-blue_to_center[active_ids_1] / 0.01)
+    #     yellow_center_align = torch.exp(-yellow_to_center[active_ids_1] / 0.01)
 
-        if not hasattr(env, "phase1_tip_hold"):
-            env.phase1_tip_hold = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+    #     tip_close_center = torch.where(
+    #         pushing_left_mask,
+    #         5.0 * blue_center_align * live_align[active_ids_1].float(),
+    #         5.0 * yellow_center_align * live_align[active_ids_1].float()
+    #     )
 
-        env.phase1_tip_hold[active_ids_1] = torch.where(
-            live_align[active_ids_1],
-            env.phase1_tip_hold[active_ids_1] + 1,
-            torch.zeros_like(env.phase1_tip_hold[active_ids_1])
-        )
+    #     reward[active_ids_1] += 15.0 * center_align
+    #     reward[active_ids_1] += alignment_reward
 
-        hold_gate = (env.phase1_tip_hold[active_ids_1] >= 3).float()
+    #     if not hasattr(env, "phase1_tip_hold"):
+    #         env.phase1_tip_hold = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
 
-        reward[active_ids_1] += tip_close_center * hold_gate.float()
+    #     env.phase1_tip_hold[active_ids_1] = torch.where(
+    #         live_align[active_ids_1],
+    #         env.phase1_tip_hold[active_ids_1] + 1,
+    #         torch.zeros_like(env.phase1_tip_hold[active_ids_1])
+    #     )
 
-        reward[active_ids_1] += 40.0 * torch.exp(-tip_dist_to_path / 0.02) * hold_gate.float()
+    #     hold_gate = (env.phase1_tip_hold[active_ids_1] >= 3).float()
 
-        # 2) Zone bonus when tip is within threshold
-        zone_bonus = torch.zeros_like(tip_dist_to_path)
-        zone_bonus[tip_close] = 20.0
-        reward[active_ids_1] += zone_bonus
+    #     reward[active_ids_1] += tip_close_center * hold_gate.float()
 
-        # 3) Advance bonus for stepping along the path
-        reward[active_ids_1] += 45.0 * advance_2.float()
+    #     reward[active_ids_1] += 40.0 * torch.exp(-tip_dist_to_path / 0.02) * hold_gate.float()
 
-        # 4a) One-time alignment_reward_2 for any env that has reached the final index (ignoring advance_2)
-        # completed_mask = (env.current_path_index_2[active_ids_1] >= 1)  # shape (M,)
-        # if completed_mask.any():
-        #     completed_ids = active_ids_1[completed_mask]          # global env IDs
-        #     reward[completed_ids] += alignment_reward_2[completed_mask]
+    #     # 2) Zone bonus when tip is within threshold
+    #     zone_bonus = torch.zeros_like(tip_dist_to_path)
+    #     zone_bonus[tip_close] = 20.0
+    #     reward[active_ids_1] += zone_bonus
 
-        # 4) Terminal bonus when final step reached
-        final_reached_2 = (env.current_path_index_2[active_ids_1] == max_step_2) & advance_2
-        reward[active_ids_1] += 50.0 * final_reached_2.float()
+    #     # 3) Advance bonus for stepping along the path
+    #     reward[active_ids_1] += 45.0 * advance_2.float()
 
-        # yaw_phase = yaw_vals[active_ids_1]                     # (M,)
-        # side_mask = pushing_left_mask                          # (M,)
+    #     # 4a) One-time alignment_reward_2 for any env that has reached the final index (ignoring advance_2)
+    #     # completed_mask = (env.current_path_index_2[active_ids_1] >= 1)  # shape (M,)
+    #     # if completed_mask.any():
+    #     #     completed_ids = active_ids_1[completed_mask]          # global env IDs
+    #     #     reward[completed_ids] += alignment_reward_2[completed_mask]
 
-        # # Normalize reward: 1.0 at 0, taper to 0.0 at ±0.5
-        # norm = (1.0 - torch.abs(yaw_phase) / 0.05).clamp(min=0.0)  # (M,)
+    #     # 4) Terminal bonus when final step reached
+    #     final_reached_2 = (env.current_path_index_2[active_ids_1] == max_step_2) & advance_2
+    #     reward[active_ids_1] += 50.0 * final_reached_2.float()
 
-        # # Only reward in the correct half‐interval
-        # valid_left = (yaw_phase <= 0.0) & (yaw_phase >= -0.2)
-        # valid_right = (yaw_phase >= 0.0) & (yaw_phase <= 0.2)
-        # valid = torch.where(side_mask, valid_left, valid_right)
+    #     # yaw_phase = yaw_vals[active_ids_1]                     # (M,)
+    #     # side_mask = pushing_left_mask                          # (M,)
 
-        # joint_reward = norm * valid.float()  # (M,)
+    #     # # Normalize reward: 1.0 at 0, taper to 0.0 at ±0.5
+    #     # norm = (1.0 - torch.abs(yaw_phase) / 0.05).clamp(min=0.0)  # (M,)
 
-        # Add it (scale as desired)
-        # reward[active_ids_1] += 7.0 * joint_reward
+    #     # # Only reward in the correct half‐interval
+    #     # valid_left = (yaw_phase <= 0.0) & (yaw_phase >= -0.2)
+    #     # valid_right = (yaw_phase >= 0.0) & (yaw_phase <= 0.2)
+    #     # valid = torch.where(side_mask, valid_left, valid_right)
 
-        if final_reached_2.any():
-            to2 = active_ids_1[final_reached_2]
-            if not hasattr(env, "check_orient"):
-                env.check_orient = torch.zeros(N, dtype=torch.long, device=device)
-            env.check_orient[to2] = 1
+    #     # joint_reward = norm * valid.float()  # (M,)
+
+    #     # Add it (scale as desired)
+    #     # reward[active_ids_1] += 7.0 * joint_reward
+
+    #     if final_reached_2.any():
+    #         to2 = active_ids_1[final_reached_2]
+    #         if not hasattr(env, "check_orient"):
+    #             env.check_orient = torch.zeros(N, dtype=torch.long, device=device)
+    #         env.check_orient[to2] = 1
 
 
         # print(live_align_2, live_center_dist, live_blue_dist, live_yellow_dist)
@@ -421,7 +438,7 @@ def path_following_reward(env):
 
     # --- Action smoothness penalties (Δu and jerk) ------------------------------
     # Hard-coded knobs (no launcher/config needed)
-    LAM_DIFF = 0.0175   # weight for first difference penalty  ||a_t - a_{t-1}||^2
+    LAM_DIFF = 0.015   # weight for first difference penalty  ||a_t - a_{t-1}||^2
     LAM_JERK = 0.0125   # weight for second difference penalty ||a_t - 2a_{t-1} + a_{t-2}||^2
 
     # Get the concatenated action tensor from IsaacLab's ActionManager

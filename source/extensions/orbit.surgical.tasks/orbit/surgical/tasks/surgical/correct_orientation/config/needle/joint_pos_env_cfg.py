@@ -27,9 +27,10 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
         self.scene.robot_1 = PSM_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot_1")
         self.scene.robot_1.init_state.pos = (-0.075, 0.15, 0.22)
         self.scene.robot_1.init_state.rot = (0.7071, 0.0, 0.0, -0.7071)
-        self.scene.robot_2 = PSM_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot_2")
-        self.scene.robot_2.init_state.pos = (-0.2, 0.2, 0.15)
-        self.scene.robot_2.init_state.rot = (0.7071, -0.7071, 0.0, 0.0)
+        # self.scene.robot_2 = PSM_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot_2")
+        # self.scene.robot_2.init_state.pos = (-0.2, 0.21, 0.15)
+        # self.scene.robot_2.init_state.pos = (0.0, 0.0, 0.0)
+        # self.scene.robot_2.init_state.rot = (0.7071, -0.7071, 0.0, 0.0)
 
         self.scene.robot_1.init_state.joint_pos = {
             "psm_main_insertion_joint": 0.06,  # Set just above minimum limit
@@ -40,11 +41,13 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
             "psm_tool_roll_joint": 0.0,
         }
 
-        self.scene.robot_2.init_state.joint_pos = {
-            "psm_main_insertion_joint": 0.06,  # Set just above minimum limit
-            "psm_tool_gripper1_joint": -0.16,  # right gripper
-            "psm_tool_gripper2_joint": 0.165  # left gripper
-        }
+        # self.scene.robot_2.init_state.joint_pos = {
+        #     "psm_main_insertion_joint": 0.06,  # Set just above minimum limit
+        #     # "psm_tool_gripper1_joint": -0.16,  # right gripper
+        #     # "psm_tool_gripper2_joint": 0.165  # left gripper
+        #     "psm_tool_gripper1_joint": -0.5,
+        #     "psm_tool_gripper2_joint": 0.5  # left gripper
+        # }
 
         # Set actions for the specific robot type (PSM)
         self.actions.body_1_joint_pos = mdp.JointPositionActionCfg(
@@ -73,29 +76,49 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
             use_default_offset=True
         )
 
-        self.actions.finger_2_joint_pos = mdp.JointPositionActionCfg(
-            asset_name="robot_2",
-            joint_names=[
-                "psm_tool_gripper1_joint",
-                "psm_tool_gripper2_joint"
-            ],
-            scale=0.0,  # Zero scale to prevent movement
-        )
+        # self.actions.finger_2_joint_pos = mdp.JointPositionActionCfg(
+        #     asset_name="robot_2",
+        #     joint_names=[
+        #         "psm_tool_gripper1_joint",
+        #         "psm_tool_gripper2_joint"
+        #     ],
+        #     scale=0.0,  # Zero scale to prevent movement
+        # )
 
         # Set the body name for the end effector
         self.commands.ee_1_pose.body_name = "psm_tool_tip_link"
 
-        # Create parent prim: /World/envs/env_X/NeedlePivot
-        self.scene.needle_pivot_xform = AssetBaseCfg(
+        # # Create parent prim: /World/envs/env_X/NeedlePivot
+        # self.scene.needle_pivot_xform = AssetBaseCfg(
+        #     prim_path="{ENV_REGEX_NS}/NeedlePivot",
+        #     init_state=AssetBaseCfg.InitialStateCfg(
+        #         pos=(-0.2, 0.1435, 0.1505),  # <-- set pivot world position here
+        #         rot=(1.0, 0.0, 0.0, 0.0)
+        #     ),
+        #     spawn=UsdFileCfg(
+        #         usd_path=f"{ORBITSURGICAL_ASSETS_DATA_DIR}/Props/Pivot/pivot.usda",  # must define `def Xform "NeedlePivot" {}`
+        #         scale=(0.001, 0.001, 0.001)
+        #     )
+        # )
+
+        self.scene.needle_pivot_xform = RigidObjectCfg(
             prim_path="{ENV_REGEX_NS}/NeedlePivot",
-            init_state=AssetBaseCfg.InitialStateCfg(
-                pos=(-0.2, 0.1435, 0.1505),  # <-- set pivot world position here
-                rot=(1.0, 0.0, 0.0, 0.0)
+            init_state=RigidObjectCfg.InitialStateCfg(
+                pos=(-0.2, 0.1435, 0.1505),  # your anchor
+                rot=(1.0, 0.0, 0.0, 0.0),
             ),
             spawn=UsdFileCfg(
-                usd_path=f"{ORBITSURGICAL_ASSETS_DATA_DIR}/Props/Pivot/pivot.usda",  # must define `def Xform "NeedlePivot" {}`
-                scale=(0.001, 0.001, 0.001)
-            )
+                usd_path=f"{ORBITSURGICAL_ASSETS_DATA_DIR}/Props/Pivot/pivot.usda",  # any tiny/useless mesh OK
+                scale=(0.001, 0.001, 0.001),
+                rigid_props=RigidBodyPropertiesCfg(
+                    kinematic_enabled=True,
+                    disable_gravity=True,
+                    solver_position_iteration_count=4,
+                    solver_velocity_iteration_count=1,
+                    max_linear_velocity=0.0,
+                    max_angular_velocity=0.0,
+                ),
+            ),
         )
 
         self.scene.object = RigidObjectCfg(
@@ -103,7 +126,8 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
             init_state=RigidObjectCfg.InitialStateCfg(
                 # pos=(0.005, 0.0, -0.01),  # Offset so pivot becomes center of rotation (x axis)
                 pos=(0.007, 0.0, -0.01), # Offset so pivot becomes center of rotation (x axis)
-                rot=(0.66446, 0.66446, -0.24184, 0.24184)
+                # rot=(0.66446, 0.66446, -0.24184, 0.24184)
+                rot=(1.0, 0.0, 0.0, 0.0),
             ),
             spawn=UsdFileCfg(
                 # Try changing to the usda file later (for friction)
@@ -117,7 +141,7 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
                     max_depenetration_velocity=0.2,
                     linear_damping=30.0,
                     angular_damping=30.0,
-                    disable_gravity=False,
+                    disable_gravity=True,
                 ),
             ),
             debug_vis=False
@@ -198,17 +222,17 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
             ]
         )
 
-        self.scene.ee_2_frame = FrameTransformerCfg(
-            prim_path="{ENV_REGEX_NS}/Robot_2/psm_base_link",
-            debug_vis=False,
-            visualizer_cfg=marker_cfg,
-            target_frames=[
-                FrameTransformerCfg.FrameCfg(
-                    prim_path="{ENV_REGEX_NS}/Robot_2/psm_tool_tip_link",
-                    name="end_effector",
-                ),
-            ],
-        )
+        # self.scene.ee_2_frame = FrameTransformerCfg(
+        #     prim_path="{ENV_REGEX_NS}/Robot_2/psm_base_link",
+        #     debug_vis=False,
+        #     visualizer_cfg=marker_cfg,
+        #     target_frames=[
+        #         FrameTransformerCfg.FrameCfg(
+        #             prim_path="{ENV_REGEX_NS}/Robot_2/psm_tool_tip_link",
+        #             name="end_effector",
+        #         ),
+        #     ],
+        # )
 
 
 @configclass

@@ -19,6 +19,7 @@ from isaaclab.utils import configclass
 
 from . import mdp
 from .mdp.phased_orientation_reward_wrapper import PhasedOrientationCMORewardWrapper
+from .mdp.joint_utils import setup_needle_pivot_joint, teardown_needle_pivot_joint
 
 
 @configclass
@@ -29,10 +30,10 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     """
     # robots: will be populated by agent env cfg
     robot_1: ArticulationCfg = MISSING
-    robot_2: ArticulationCfg = MISSING
+    # robot_2: ArticulationCfg = MISSING
     # end-effector sensor: will be populated by agent env cfg
     ee_1_frame: FrameTransformerCfg = MISSING
-    ee_2_frame: FrameTransformerCfg = MISSING
+    # ee_2_frame: FrameTransformerCfg = MISSING
     ee_1_gripper_left: FrameTransformerCfg = MISSING
     ee_1_gripper_right: FrameTransformerCfg = MISSING
     # target object: will be populated by agent env cfg
@@ -109,7 +110,7 @@ class ActionsCfg:
     finger_1_joint_pos: mdp.JointPositionActionCfg = MISSING
     
     # Add fixed configuration for robot_2's gripper
-    finger_2_joint_pos: mdp.JointPositionActionCfg = MISSING
+    # finger_2_joint_pos: mdp.JointPositionActionCfg = MISSING
 
 
 @configclass
@@ -146,7 +147,7 @@ class ObservationsCfg:
             func=mdp.phase_flags_observation
         )
 
-        side = ObsTerm(func=mdp.needle_side_onehot)
+        # side = ObsTerm(func=mdp.needle_side_onehot)
 
         # Other observations
         joint_pos = ObsTerm(
@@ -180,6 +181,16 @@ class EventCfg:
     )
 
     reset_mode_flags = EventTerm(func=mdp.reset_mode_flags, mode="reset")
+
+    # --- NEW: D6 pivot joint lifecycle ---
+    setup_pivot_joint = EventTerm(
+        func=setup_needle_pivot_joint,
+        mode="reset",  # create once when envs come up
+    )
+    teardown_pivot_joint = EventTerm(
+        func=teardown_needle_pivot_joint,
+        mode="reset",    # destroy on every reset so frames rebuild after randomization
+    )
 
 
 
@@ -228,6 +239,14 @@ class CurriculumCfg:
         func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -1e-1, "num_steps": 10000}
     )
 
+
+@configclass
+class PivotJointCfg:
+    """Config for pinning the needle to the pivot via D6 joint."""
+    mode: str = "HINGE"          # "WELD" or "HINGE"
+    hinge_axis: str = "needle_x"  # "world_x|y|z" or "needle_x|y|z"
+
+
 @configclass
 class CorrOrientationEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the handover environment."""
@@ -243,6 +262,7 @@ class CorrOrientationEnvCfg(ManagerBasedRLEnvCfg):
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
     curriculum: CurriculumCfg = CurriculumCfg()
+    pivot_joint: PivotJointCfg = PivotJointCfg()
 
     def __post_init__(self):
         """Post initialization."""

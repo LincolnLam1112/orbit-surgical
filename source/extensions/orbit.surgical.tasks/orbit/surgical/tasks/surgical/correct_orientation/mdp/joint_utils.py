@@ -11,6 +11,59 @@ try:
 except Exception:
     quat_to_rot_matrix = None  # type: ignore
 
+# add near top
+from pxr import Usd, UsdPhysics, Gf, Sdf
+
+def _quat_apply(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    vq = torch.cat([torch.zeros_like(v[..., :1]), v], dim=-1)
+    return _quat_multiply(_quat_multiply(q, vq), _quat_conjugate(q))[..., 1:4]
+
+
+def _usd_define_joint_prim(stage, joint_path: str, joint_type: str):
+    if joint_type == "fixed":
+        return UsdPhysics.FixedJoint.Define(stage, Sdf.Path(joint_path))
+    elif joint_type == "revolute":
+        return UsdPhysics.RevoluteJoint.Define(stage, Sdf.Path(joint_path))
+    else:
+        raise ValueError(f"Unsupported joint_type: {joint_type}")
+
+def _usd_set_local_pose(joint, body0_path: str, body1_path: str,
+                        p0: torch.Tensor, q0: torch.Tensor,
+                        p1: torch.Tensor, q1: torch.Tensor):
+    # Bind bodies
+    joint.CreateBody0Rel().SetTargets([Sdf.Path(body0_path)])
+    joint.CreateBody1Rel().SetTargets([Sdf.Path(body1_path)])
+    # Local poses (author as Gf)
+    joint.CreateLocalPos0Attr().Set(Gf.Vec3f(float(p0[0]), float(p0[1]), float(p0[2])))
+    joint.CreateLocalPos1Attr().Set(Gf.Vec3f(float(p1[0]), float(p1[1]), float(p1[2])))
+    joint.CreateLocalRot0Attr().Set(Gf.Quatf(float(q0[0]), Gf.Vec3f(float(q0[1]), float(q0[2]), float(q0[3]))))
+    joint.CreateLocalRot1Attr().Set(Gf.Quatf(float(q1[0]), Gf.Vec3f(float(q1[1]), float(q1[2]), float(q1[3]))))
+
+def _create_usd_weld_joint(env, eid: int,
+                           body0_prim_path: str, body1_prim_path: str,
+                           p0_l: torch.Tensor, q0_l: torch.Tensor,
+                           p1_l: torch.Tensor, q1_l: torch.Tensor):
+    stage = env.scene.stage  # most IsaacLab envs expose the USD stage here
+    joint_path = f"{body0_prim_path}/PivotWeldJoint_{eid}"
+    j = _usd_define_joint_prim(stage, joint_path, "fixed")
+    _usd_set_local_pose(j, body0_prim_path, body1_prim_path, p0_l, q0_l, p1_l, q1_l)
+    return joint_path
+
+def _create_usd_hinge_joint(env, eid: int,
+                            body0_prim_path: str, body1_prim_path: str,
+                            p0_l: torch.Tensor, q0_l: torch.Tensor,
+                            p1_l: torch.Tensor, q1_l: torch.Tensor,
+                            axis: str = "X"):
+    stage = env.scene.stage
+    joint_path = f"{body0_prim_path}/PivotHingeJoint_{eid}"
+    j = _usd_define_joint_prim(stage, joint_path, "revolute")
+    _usd_set_local_pose(j, body0_prim_path, body1_prim_path, p0_l, q0_l, p1_l, q1_l)
+    # Axis can be "X", "Y", or "Z"
+    axis_token = getattr(UsdPhysics.Tokens, axis.lower())  # <- lowercase
+    j.CreateAxisAttr().Set(axis_token)
+    # Lock limits if you want no range (pure hinge with free rotation):
+    # j.CreateLowerLimitAttr().Set(0.0); j.CreateUpperLimitAttr().Set(0.0)  # (omit to keep free)
+    return joint_path
 
 # ----------------------------
 # Small quaternion utilities
@@ -93,113 +146,237 @@ def make_local_frame(
 # -------------------------------------------------------
 # Create / destroy a temporary clamp (per-env handles)
 # -------------------------------------------------------
-def create_clamp_joint(
+def _axis_world_from_choice(needle_quat_w: torch.Tensor, hinge_axis: str, device) -> torch.Tensor:
+    """Return a world-space axis (3,) given 'world_x|y|z' or 'needle_x|y|z'."""
+    hinge_axis = (hinge_axis or "needle_x").lower()
+    base = {
+        "x": torch.tensor([1.0, 0.0, 0.0], device=device),
+        "y": torch.tensor([0.0, 1.0, 0.0], device=device),
+        "z": torch.tensor([0.0, 0.0, 1.0], device=device),
+    }
+    if hinge_axis.startswith("world_"):
+        return base[hinge_axis[-1]]
+    # rotate local needle axis into world
+    local = base[hinge_axis[-1]]
+    # q * v * q_conj
+    q = needle_quat_w
+    v = torch.tensor([0.0, *local.tolist()], device=device)  # as quaternion (0, x, y, z)
+    qv = _quat_multiply(q, v)
+    qvq = _quat_multiply(qv, _quat_conjugate(q))
+    return qvq[..., 1:4]
+
+def create_pivot_joint(
     env,
     env_ids: Sequence[int],
-    world_anchor: torch.Tensor,       # (K,3) world coords per env id
-    world_axis: Optional[torch.Tensor],  # (K,3) or None
-    cfg,                              # env.cfg.no_slip
+    mode: str = "WELD",                  # "WELD" or "HINGE"
+    hinge_axis: Optional[str] = "needle_x",
+    pivot_key: str = "needle_pivot_xform",
+    needle_key: str = "object",
+    anchor_offset_local=(0.03, 0.042, 0.0),
 ) -> None:
-    """Create a D6 joint between active gripper tip body and needle.
-    Linear X/Y/Z locked. Angular depends on cfg.clamp_mode.
+    
     """
-    N = env.num_envs
-    device = world_anchor.device
+    Create a PhysX D6 joint per env that pins the needle to the pivot at the pivot's world pose.
+    - Locks all linear axes.
+    - WELD: lock all angular axes.
+    - HINGE: free twist (x) in the joint frame; lock (y,z).
+    """
+    if isinstance(env_ids, int):
+        env_ids = [env_ids]
+    device = env.device
 
-    if not hasattr(env, "_clamp_joint_handles"):
-        env._clamp_joint_handles = [None] * N
-    if not hasattr(env, "_clamp_joint_active"):
-        env._clamp_joint_active = torch.zeros(N, dtype=torch.bool, device=device)
+    # Allocate storage once
+    if not hasattr(env, "_pivot_joint_handles"):
+        env._pivot_joint_handles = [None] * env.num_envs
+    if not hasattr(env, "_pivot_joint_active"):
+        env._pivot_joint_active = [False] * env.num_envs
 
-    # You already track the active pushing side; for simplicity we attach the clamp to robot_1 root
-    # and the needle root. If you have specific tip rigid bodies available, substitute them here.
     try:
-        robot = env.scene["robot_1"]
-        needle = env.scene["object"]
-    except Exception:
-        print("[joint_utils] Warning: robot_1/object not found in scene; clamp disabled.")
+        pivot = env.scene[pivot_key]
+        needle = env.scene[needle_key]
+    except Exception as exc:
+        print(f"[joint_utils] Pivot/Needle not found ({pivot_key}/{needle_key}): {exc}")
         return
 
     for i, eid in enumerate(env_ids):
-        # Ensure previous clamp is gone
-        if env._clamp_joint_active[eid]:
-            destroy_clamp_joint(env, [eid])
+        # Skip if already active
+        if env._pivot_joint_active[eid]:
+            continue
 
-        anchor_w = world_anchor[i]
-        axis_w = None if world_axis is None else world_axis[i]
+        # Anchor at the pivot’s world pose (position; axis defines joint frame x-axis)
+        pivot_pos_w  = pivot.data.root_pos_w[eid]
+        pivot_quat_w = pivot.data.root_quat_w[eid]
+        needle = env.scene["object"]
+        needle_pos_w  = needle.data.root_pos_w[eid]   # world position (3,)
+        needle_quat_w = needle.data.root_quat_w[eid]  # world orientation (w,x,y,z)
 
-        tip_pos = robot.data.root_pos_w[eid]
-        tip_quat = robot.data.root_quat_w[eid]
-        ned_pos = needle.data.root_pos_w[eid]
-        ned_quat = needle.data.root_quat_w[eid]
+        off_l = torch.tensor(anchor_offset_local, device=env.device)
 
-        tip_p_l, tip_q_l = make_local_frame(tip_pos.unsqueeze(0), tip_quat.unsqueeze(0),
+        # world anchor = pivot_pos + R(pivot_quat) * offset_local
+        anchor_w = pivot_pos_w + _quat_apply(pivot_quat_w, off_l)
+        axis_w = None
+        if mode.upper() == "HINGE":
+            axis_w = _axis_world_from_choice(needle.data.root_quat_w[eid], hinge_axis, device)
+
+        # Build local joint frames on pivot (parent) and needle (child)
+        p_pos_l, p_quat_l = make_local_frame(pivot_pos_w.unsqueeze(0), pivot_quat_w.unsqueeze(0),
                                             anchor_w.unsqueeze(0),
-                                            axis_w.unsqueeze(0) if axis_w is not None else None)
-        ned_p_l, ned_q_l = make_local_frame(ned_pos.unsqueeze(0), ned_quat.unsqueeze(0),
+                                            None if axis_w is None else axis_w.unsqueeze(0))
+        n_pos_l, n_quat_l = make_local_frame(needle_pos_w.unsqueeze(0), needle_quat_w.unsqueeze(0),
                                             anchor_w.unsqueeze(0),
-                                            axis_w.unsqueeze(0) if axis_w is not None else None)
-        tip_p_l, tip_q_l = tip_p_l[0], tip_q_l[0]
-        ned_p_l, ned_q_l = ned_p_l[0], ned_q_l[0]
+                                            None if axis_w is None else axis_w.unsqueeze(0))
+
+        p_pos_l, p_quat_l = p_pos_l[0], p_quat_l[0]
+        n_pos_l, n_quat_l = n_pos_l[0], n_quat_l[0]
+
+        # Locks
+        linear_locks = (True, True, True)
+        if mode.upper() == "WELD":
+            angular_locks = (True, True, True)
+        else:  # HINGE — free twist around joint-frame x
+            angular_locks = (False, True, True)
 
         handle = None
         try:
-            # Prefer a scene-level helper if available
             if hasattr(env.scene, "add_d6_joint"):
                 handle = env.scene.add_d6_joint(
-                    body0=robot,
+                    body0=pivot,
                     body1=needle,
-                    local_pose0=(tip_p_l.tolist(), tip_q_l.tolist()),
-                    local_pose1=(ned_p_l.tolist(), ned_q_l.tolist()),
-                    # lock all linear axes
-                    linear_locks=(True, True, True),
-                    # angular: hinge or free with damping
-                    angular_locks=(
-                        cfg.clamp_mode != "FREE_ANG_DAMP",   # twist free only if FREE_ANG_DAMP
-                        cfg.clamp_mode == "HINGE",
-                        cfg.clamp_mode == "HINGE",
-                    ),
-                    angular_damping=cfg.joint_angular_damping if cfg.clamp_mode == "FREE_ANG_DAMP" else 0.0,
+                    local_pose0=(p_pos_l.tolist(), p_quat_l.tolist()),
+                    local_pose1=(n_pos_l.tolist(), n_quat_l.tolist()),
+                    linear_locks=linear_locks,
+                    angular_locks=angular_locks,
                 )
             elif hasattr(env, "create_d6_joint"):
                 handle = env.create_d6_joint(
-                    robot, needle,
-                    tip_p_l, tip_q_l,
-                    ned_p_l, ned_q_l,
-                    linear_locks=(True, True, True),
-                    angular_locks=(
-                        cfg.clamp_mode != "FREE_ANG_DAMP",
-                        cfg.clamp_mode == "HINGE",
-                        cfg.clamp_mode == "HINGE",
-                    ),
-                    angular_damping=cfg.joint_angular_damping if cfg.clamp_mode == "FREE_ANG_DAMP" else 0.0,
+                    pivot, needle,
+                    p_pos_l, p_quat_l,
+                    n_pos_l, n_quat_l,
+                    linear_locks=linear_locks,
+                    angular_locks=angular_locks,
                 )
             else:
-                print(f"[joint_utils] Warning: No API to create D6 joint for env {eid}; clamp skipped.")
+                pivot = env.scene["needle_pivot_xform"]
+                needle = env.scene["object"]
+
+                # Prefer cfg.prim_path; if you already got a string from elsewhere, pass it in here.
+                pivot_path_tmpl  = getattr(pivot.cfg,  "prim_path",  "")
+                needle_path_tmpl = getattr(needle.cfg, "prim_path",  "")
+
+                pivot_path  = _expand_env_path(pivot_path_tmpl,  env, eid)
+                needle_path = _expand_env_path(needle_path_tmpl, env, eid)
+
+                # Debug (first env)
+                if eid == 0:
+                    if hasattr(env, "logger"):
+                        env.logger.info(f"[joint_utils] env {eid} pivot_path={pivot_path}")
+                        env.logger.info(f"[joint_utils] env {eid} needle_path={needle_path}")
+                    # else:
+                        # print("[joint_utils] pivot_path:", pivot_path)
+                        # print("[joint_utils] needle_path:", needle_path)
+
+                if mode.upper() == "WELD":
+                    joint_prim_path = _create_usd_weld_joint(env, eid, pivot_path, needle_path,
+                                                            p_pos_l, p_quat_l, n_pos_l, n_quat_l)
+                else:
+                    # Choose which axis is the hinge in the joint frame; our make_local_frame aligns x to hinge
+                    joint_prim_path = _create_usd_hinge_joint(env, eid, pivot_path, needle_path,
+                                                            p_pos_l, p_quat_l, n_pos_l, n_quat_l,
+                                                            axis="X")
+
+                env._pivot_joint_handles[eid] = joint_prim_path  # store the path as handle
+                env._pivot_joint_active[eid] = True
         except Exception as exc:
-            print(f"[joint_utils] Warning: failed to create clamp for env {eid}: {exc}")
+            print(f"[joint_utils] Failed to create pivot joint for env {eid}: {exc}")
 
-        env._clamp_joint_handles[eid] = handle
-        env._clamp_joint_active[eid] = bool(handle)
+        env._pivot_joint_handles[eid] = handle
+        env._pivot_joint_active[eid] = bool(handle)
+        if hasattr(env, "logger") and handle:
+            env.logger.info(
+                f"[PivotJoint] Env {eid}: Created at {anchor_w.cpu().numpy()}, "
+                f"mode={mode}, hinge_axis={hinge_axis}, locks=(lin={linear_locks}, ang={angular_locks})"
+            )
 
-
-def destroy_clamp_joint(env, env_ids: Sequence[int]) -> None:
-    """Destroy clamp joints for the given envs (if present)."""
-    if not hasattr(env, "_clamp_joint_handles"):
-        return
+def destroy_pivot_joint(env, env_ids):
+    if isinstance(env_ids, int):
+        env_ids = [env_ids]
+    stage = env.scene.stage
     for eid in env_ids:
-        h = env._clamp_joint_handles[eid]
-        if h is None:
-            env._clamp_joint_active[eid] = False
-            continue
-        try:
-            if hasattr(env.scene, "remove_joint"):
-                env.scene.remove_joint(h)
-            elif hasattr(env, "destroy_joint"):
-                env.destroy_joint(h)
-            else:
-                print(f"[joint_utils] Warning: No API to destroy D6 joint for env {eid}.")
-        except Exception as exc:
-            print(f"[joint_utils] Warning: failed to destroy clamp for env {eid}: {exc}")
-        env._clamp_joint_handles[eid] = None
-        env._clamp_joint_active[eid] = False
+        handle = getattr(env, "_pivot_joint_handles", [None]*env.num_envs)[eid]
+        if handle:
+            prim = stage.GetPrimAtPath(handle)
+            if prim.IsValid():
+                stage.RemovePrim(prim.GetPath())
+        if hasattr(env, "_pivot_joint_handles"):
+            env._pivot_joint_handles[eid] = None
+        if hasattr(env, "_pivot_joint_active"):
+            env._pivot_joint_active[eid] = False
+
+
+def setup_needle_pivot_joint(env, env_ids, mode: str | None = None, hinge_axis: str | None = None) -> None:
+    # pull defaults from cfg if not provided
+    if mode is None and hasattr(env, "cfg") and hasattr(env.cfg, "pivot_joint"):
+        mode = getattr(env.cfg.pivot_joint, "mode", "WELD")
+    if hinge_axis is None and hasattr(env, "cfg") and hasattr(env.cfg, "pivot_joint"):
+        hinge_axis = getattr(env.cfg.pivot_joint, "hinge_axis", "needle_x")
+    # env_ids is provided by EventManager; create joints for exactly these envs
+    create_pivot_joint(env, env_ids, mode=mode or "WELD", hinge_axis=hinge_axis or "needle_x")
+
+
+def teardown_needle_pivot_joint(env, env_ids) -> None:
+    destroy_pivot_joint(env, env_ids)
+
+
+import re
+
+def _env_ns(env) -> str:
+    # Use scene's namespace if available, else fall back to the common default.
+    return getattr(env.scene, "env_ns", "/World/envs/env")
+
+def _expand_env_path(tmpl: str, env, eid: int) -> str:
+    """
+    Turn a template/regex prim path into a concrete per-env path.
+    Handles both {ENV_REGEX_NS} and the baked 'env_.*' regex variant.
+    """
+    per_env_ns = f"{_env_ns(env)}_{eid}"            # e.g., "/World/envs/env_0"
+    s = tmpl
+    # 1) Replace template token, if present
+    s = s.replace("{ENV_REGEX_NS}", per_env_ns)
+    # 2) Replace regex form "env_.*" with "env_{eid}"
+    s = re.sub(r"env_\.\*", f"env_{eid}", s)
+    return s
+
+def _get_env_prim_path(asset, eid: int) -> str:
+    """
+    Resolve per-env USD prim path for an IsaacLab asset.
+    1) Prefer cfg.prim_path with {ENV_REGEX_NS}.
+    2) Fallback to PhysX view internals if available.
+    """
+    # 1) From cfg template
+    if hasattr(asset, "cfg") and hasattr(asset.cfg, "prim_path"):
+        tmpl = asset.cfg.prim_path
+        if isinstance(tmpl, str) and tmpl:
+            if "{ENV_REGEX_NS}" in tmpl:
+                return tmpl.replace("{ENV_REGEX_NS}", _env_ns(eid))
+            # If no placeholder, assume it's already a full path (single env)
+            return tmpl
+
+    # 2) From PhysX view (implementation-dependent)
+    # Try root_physx_view or _root_physx_view
+    view = getattr(asset, "root_physx_view", None) or getattr(asset, "_root_physx_view", None)
+    if view is not None:
+        # Common private attr in many builds
+        if hasattr(view, "_body_paths"):
+            paths = getattr(view, "_body_paths")
+            return str(paths[eid])
+        # Some builds expose a getter
+        if hasattr(view, "get_prim_paths"):
+            paths = view.get_prim_paths()
+            return str(paths[eid])
+
+    # 3) Give a helpful error
+    raise AttributeError(
+        f"Cannot determine prim path for asset {type(asset).__name__}. "
+        f"Expected asset.cfg.prim_path to be set (with '{{ENV_REGEX_NS}}')."
+    )
+

@@ -4,7 +4,6 @@ from typing import Optional
 from .shared_phase_flags import get_mode_flags
 from .visualization import _contact_point_world, ee_contact_point_world, quat_to_rot_matrix, visualize_reference_path
 from .path_generator import LinearPathGenerator
-from .joint_utils import destroy_clamp_joint
 
 
 def _active_ids(env, env_ids):
@@ -43,126 +42,126 @@ def reset_only_robot1(env: ManagerBasedEnv,
     robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=ids)
 
 
-def reset_needle_about_pivot(env, env_ids: Optional[torch.Tensor] = None) -> None:
-    """
-    Re-randomise the needle around its pivot without disturbing the robots.
-    Works for batched environments.
-    """
-    needle = env.scene["object"]
-    device = env.device
-    ids = _active_ids(env, env_ids)
-    N = ids.numel()
+# def reset_needle_about_pivot(env, env_ids: Optional[torch.Tensor] = None) -> None:
+#     """
+#     Re-randomise the needle around its pivot without disturbing the robots.
+#     Works for batched environments.
+#     """
+#     needle = env.scene["object"]
+#     device = env.device
+#     ids = _active_ids(env, env_ids)
+#     N = ids.numel()
 
-    root_state = needle.data.root_state_w.clone()      # (num_envs,13)
+#     root_state = needle.data.root_state_w.clone()      # (num_envs,13)
 
-    # ── CONSTANTS  (LOCAL  ↦  per-env world) ────────────────────────────────
-    pivot_local = torch.tensor([-0.200, 0.1435, 0.1505], device=device)   # in env frame
-    offset_local = torch.tensor([0.005, 0.000 , -0.010], device=device)
-    q_init = torch.tensor([0.66446, 0.66446, -0.24184, 0.24184], device=device)  # (w,x,y,z)
+#     # ── CONSTANTS  (LOCAL  ↦  per-env world) ────────────────────────────────
+#     pivot_local = torch.tensor([-0.200, 0.1435, 0.1505], device=device)   # in env frame
+#     offset_local = torch.tensor([0.005, 0.000 , -0.010], device=device)
+#     # q_init = torch.tensor([0.66446, 0.66446, -0.24184, 0.24184], device=device)  # (w,x,y,z)
+#     q_init = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device)
+#     origins = env.scene.env_origins[ids]                             # (N,3)
+#     pivot_world = origins + pivot_local                                  # (N,3)
 
-    origins = env.scene.env_origins[ids]                             # (N,3)
-    pivot_world = origins + pivot_local                                  # (N,3)
+#     # ── random roll about needle axis ───────────────────────────────────────
+#     roll_deg = torch.empty(0, device=device)
+#     while roll_deg.numel() < N:
+#         roll_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)
+#         # roll_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)
 
-    # ── random roll about needle axis ───────────────────────────────────────
-    roll_deg = torch.empty(0, device=device)
-    while roll_deg.numel() < N:
-        roll_deg = torch.empty(N, device=device).uniform_(-50.0, 50.0)
-        # roll_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)
+#     roll_deg = roll_deg[:N]  # trim to exactly N
+#     roll_rad = torch.deg2rad(roll_deg)
 
-    roll_deg = roll_deg[:N]  # trim to exactly N
-    roll_rad = torch.deg2rad(roll_deg)
+#     half = roll_rad * 0.5
+#     q_roll = torch.stack([torch.cos(half), torch.sin(half),                # (N,4)
+#                           torch.zeros_like(half), torch.zeros_like(half)],
+#                          dim=1)
 
-    half = roll_rad * 0.5
-    q_roll = torch.stack([torch.cos(half), torch.sin(half),                # (N,4)
-                          torch.zeros_like(half), torch.zeros_like(half)],
-                         dim=1)
+#     # quaternion multiplication  q_final = q_roll ∘ q_init
+#     w1, x1, y1, z1 = q_roll.T
+#     w2, x2, y2, z2 = q_init
+#     q_final = torch.stack([ w1*w2 - x1*x2 - y1*y2 - z1*z2,
+#                             w1*x2 + x1*w2 + y1*z2 - z1*y2,
+#                             w1*y2 - x1*z2 + y1*w2 + z1*x2,
+#                             w1*z2 + x1*y2 - y1*x2 + z1*w2 ], dim=1)
 
-    # quaternion multiplication  q_final = q_roll ∘ q_init
-    w1, x1, y1, z1 = q_roll.T
-    w2, x2, y2, z2 = q_init
-    q_final = torch.stack([ w1*w2 - x1*x2 - y1*y2 - z1*z2,
-                            w1*x2 + x1*w2 + y1*z2 - z1*y2,
-                            w1*y2 - x1*z2 + y1*w2 + z1*x2,
-                            w1*z2 + x1*y2 - y1*x2 + z1*w2 ], dim=1)
+#     # ── rotate offset vector by q_roll (fast formula) ───────────────────────
+#     u = q_roll[:, 1:]                       # (N,3)
+#     s = q_roll[:, :1]                       # (N,1)
+#     offset = offset_local.expand(N, 3)           # (N,3)
 
-    # ── rotate offset vector by q_roll (fast formula) ───────────────────────
-    u = q_roll[:, 1:]                       # (N,3)
-    s = q_roll[:, :1]                       # (N,1)
-    offset = offset_local.expand(N, 3)           # (N,3)
+#     dot = (u * offset).sum(1, keepdim=True)
+#     rotated_offset = (2 * dot) * u \
+#         + (s * s - (u * u).sum(1, keepdim=True)) * offset \
+#         + 2 * s * torch.cross(u, offset, dim=1)                      # (N,3)
 
-    dot = (u * offset).sum(1, keepdim=True)
-    rotated_offset = (2 * dot) * u \
-        + (s * s - (u * u).sum(1, keepdim=True)) * offset \
-        + 2 * s * torch.cross(u, offset, dim=1)                      # (N,3)
+#     # ── write new pose ──────────────────────────────────────────────────────
+#     root_state[ids, :3] = pivot_world + rotated_offset
+#     root_state[ids, 3:7] = q_final
+#     root_state[ids, 7:13].zero_()                  # zero the velocities
+#     env.initial_needle_pos = needle.data.root_pos_w.clone()
 
-    # ── write new pose ──────────────────────────────────────────────────────
-    root_state[ids, :3] = pivot_world + rotated_offset
-    root_state[ids, 3:7] = q_final
-    root_state[ids, 7:13].zero_()                  # zero the velocities
-    env.initial_needle_pos = needle.data.root_pos_w.clone()
-
-    needle.write_root_state_to_sim(root_state[ids], env_ids=ids)
+#     needle.write_root_state_to_sim(root_state[ids], env_ids=ids)
 
 
-def reset_needle_about_pivot_z(env, env_ids: Optional[torch.Tensor] = None) -> None:
-    """
-    Re-randomise the needle around its pivot without disturbing the robots.
-    Works for batched environments.
-    """
-    needle = env.scene["object"]
-    device = env.device
-    ids = _active_ids(env, env_ids)
-    N = ids.numel()
+# def reset_needle_about_pivot_z(env, env_ids: Optional[torch.Tensor] = None) -> None:
+#     """
+#     Re-randomise the needle around its pivot without disturbing the robots.
+#     Works for batched environments.
+#     """
+#     needle = env.scene["object"]
+#     device = env.device
+#     ids = _active_ids(env, env_ids)
+#     N = ids.numel()
 
-    root_state = needle.data.root_state_w.clone()      # (num_envs,13)
+#     root_state = needle.data.root_state_w.clone()      # (num_envs,13)
 
-    # ── CONSTANTS  (LOCAL  ↦  per-env world) ────────────────────────────────
-    pivot_local = torch.tensor([-0.200, 0.1435, 0.1505], device=device)   # in env frame
-    offset_local = torch.tensor([0.005, 0.000 , -0.010], device=device)
-    q_init = torch.tensor([0.66446, 0.66446, -0.24184, 0.24184], device=device)  # (w,x,y,z)
+#     # ── CONSTANTS  (LOCAL  ↦  per-env world) ────────────────────────────────
+#     pivot_local = torch.tensor([-0.200, 0.1435, 0.1505], device=device)   # in env frame
+#     offset_local = torch.tensor([0.005, 0.000 , -0.010], device=device)
+#     q_init = torch.tensor([0.66446, 0.66446, -0.24184, 0.24184], device=device)  # (w,x,y,z)
 
-    origins = env.scene.env_origins[ids]                             # (N,3)
-    pivot_world = origins + pivot_local                                  # (N,3)
+#     origins = env.scene.env_origins[ids]                             # (N,3)
+#     pivot_world = origins + pivot_local                                  # (N,3)
 
-    # ── random roll about needle axis ───────────────────────────────────────
-    roll_deg = torch.empty(0, device=device)
-    while roll_deg.numel() < N:
-        roll_deg = torch.empty(N, device=device).uniform_(-45.0, 45.0)
-        # roll_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)
+#     # ── random roll about needle axis ───────────────────────────────────────
+#     roll_deg = torch.empty(0, device=device)
+#     while roll_deg.numel() < N:
+#         roll_deg = torch.empty(N, device=device).uniform_(-45.0, 45.0)
+#         # roll_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)
 
-    roll_deg = roll_deg[:N]  # trim to exactly N
-    roll_rad = torch.deg2rad(roll_deg)
+#     roll_deg = roll_deg[:N]  # trim to exactly N
+#     roll_rad = torch.deg2rad(roll_deg)
 
-    half = roll_rad * 0.5
-    q_roll = torch.stack([torch.cos(half), torch.zeros_like(half),                # (N,4)
-                          torch.zeros_like(half), torch.sin(half)],
-                         dim=1)
+#     half = roll_rad * 0.5
+#     q_roll = torch.stack([torch.cos(half), torch.zeros_like(half),                # (N,4)
+#                           torch.zeros_like(half), torch.sin(half)],
+#                          dim=1)
 
-    # quaternion multiplication  q_final = q_roll ∘ q_init
-    w1, x1, y1, z1 = q_roll.T
-    w2, x2, y2, z2 = q_init
-    q_final = torch.stack([ w1*w2 - x1*x2 - y1*y2 - z1*z2,
-                            w1*x2 + x1*w2 + y1*z2 - z1*y2,
-                            w1*y2 - x1*z2 + y1*w2 + z1*x2,
-                            w1*z2 + x1*y2 - y1*x2 + z1*w2 ], dim=1)
+#     # quaternion multiplication  q_final = q_roll ∘ q_init
+#     w1, x1, y1, z1 = q_roll.T
+#     w2, x2, y2, z2 = q_init
+#     q_final = torch.stack([ w1*w2 - x1*x2 - y1*y2 - z1*z2,
+#                             w1*x2 + x1*w2 + y1*z2 - z1*y2,
+#                             w1*y2 - x1*z2 + y1*w2 + z1*x2,
+#                             w1*z2 + x1*y2 - y1*x2 + z1*w2 ], dim=1)
 
-    # ── rotate offset vector by q_roll (fast formula) ───────────────────────
-    u = q_roll[:, 1:]                       # (N,3)
-    s = q_roll[:, :1]                       # (N,1)
-    offset = offset_local.expand(N, 3)           # (N,3)
+#     # ── rotate offset vector by q_roll (fast formula) ───────────────────────
+#     u = q_roll[:, 1:]                       # (N,3)
+#     s = q_roll[:, :1]                       # (N,1)
+#     offset = offset_local.expand(N, 3)           # (N,3)
 
-    dot = (u * offset).sum(1, keepdim=True)
-    rotated_offset = (2 * dot) * u \
-        + (s * s - (u * u).sum(1, keepdim=True)) * offset \
-        + 2 * s * torch.cross(u, offset, dim=1)                      # (N,3)
+#     dot = (u * offset).sum(1, keepdim=True)
+#     rotated_offset = (2 * dot) * u \
+#         + (s * s - (u * u).sum(1, keepdim=True)) * offset \
+#         + 2 * s * torch.cross(u, offset, dim=1)                      # (N,3)
 
-    # ── write new pose ──────────────────────────────────────────────────────
-    root_state[ids, :3] = pivot_world + rotated_offset
-    root_state[ids, 3:7] = q_final
-    root_state[ids, 7:13].zero_()                  # zero the velocities
-    env.initial_needle_pos = needle.data.root_pos_w.clone()
+#     # ── write new pose ──────────────────────────────────────────────────────
+#     root_state[ids, :3] = pivot_world + rotated_offset
+#     root_state[ids, 3:7] = q_final
+#     root_state[ids, 7:13].zero_()                  # zero the velocities
+#     env.initial_needle_pos = needle.data.root_pos_w.clone()
 
-    needle.write_root_state_to_sim(root_state[ids], env_ids=ids)
+#     needle.write_root_state_to_sim(root_state[ids], env_ids=ids)
 
 
 def reset_needle_about_pivot_xz(env, env_ids: Optional[torch.Tensor] = None) -> None:
@@ -182,7 +181,8 @@ def reset_needle_about_pivot_xz(env, env_ids: Optional[torch.Tensor] = None) -> 
     # ── CONSTANTS (LOCAL → per-env world) ───────────────────────────────────
     pivot_local  = torch.tensor([-0.200, 0.1435, 0.1505], device=device)   # env frame
     offset_local = torch.tensor([ 0.005, 0.000 , -0.010], device=device)
-    q_init       = torch.tensor([0.66446, 0.66446, -0.24184, 0.24184], device=device)  # (w,x,y,z)
+    # q_init       = torch.tensor([0.66446, 0.66446, -0.24184, 0.24184], device=device)  # (w,x,y,z)
+    q_init = torch.tensor([0.7071, 0.7071, 0.0, 0.0], device=device)
 
     origins     = env.scene.env_origins[ids]     # (N,3)
     pivot_world = origins + pivot_local          # (N,3)
@@ -193,6 +193,7 @@ def reset_needle_about_pivot_xz(env, env_ids: Optional[torch.Tensor] = None) -> 
     while z_deg.numel() < N or x_deg.numel() < N:
         z_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)  # Z first
         x_deg = torch.empty(N, device=device).uniform_(-40.0, 40.0)  # X second
+        # x_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)  # X second
     z_deg = z_deg[:N]
     x_deg = x_deg[:N]
     z_half = torch.deg2rad(z_deg) * 0.5
@@ -231,6 +232,16 @@ def reset_needle_about_pivot_xz(env, env_ids: Optional[torch.Tensor] = None) -> 
         W1*Z2 + X1*Y2 - Y1*X2 + Z1*W2
     ], dim=1)
 
+    # # ── total orientation: q_final = q_init ∘ q_delta  (LOCAL frame) ───────────
+    # Wb, Xb, Yb, Zb = q_delta.T           # batch
+    # w0, x0, y0, z0 = q_init              # scalars
+    # q_final = torch.stack([
+    #     w0*Wb - x0*Xb - y0*Yb - z0*Zb,
+    #     w0*Xb + x0*Wb + y0*Zb - z0*Yb,
+    #     w0*Yb - x0*Zb + y0*Wb + z0*Xb,
+    #     w0*Zb + x0*Yb - y0*Xb + z0*Wb
+    # ], dim=1)
+
     # ── rotate offset vector by q_delta (same “fast” formula you used) ─────
     u = q_delta[:, 1:]             # (N,3)
     s = q_delta[:, :1]             # (N,1)
@@ -240,6 +251,15 @@ def reset_needle_about_pivot_xz(env, env_ids: Optional[torch.Tensor] = None) -> 
     rotated_offset = (2 * dot) * u \
         + (s * s - (u * u).sum(1, keepdim=True)) * offset \
         + 2 * s * torch.cross(u, offset, dim=1)   # (N,3)
+
+    # # ── rotate offset vector by q_final (LOCAL) ────────────────────────────────
+    # u = q_final[:, 1:]                   # (N,3)
+    # s = q_final[:, :1]                   # (N,1)
+    # offset = offset_local.expand(N, 3)
+    # dot = (u * offset).sum(1, keepdim=True)
+    # rotated_offset = (2 * dot) * u \
+    #     + (s * s - (u * u).sum(1, keepdim=True)) * offset \
+    #     + 2 * s * torch.cross(u, offset, dim=1)
 
     # ── write new pose ─────────────────────────────────────────────────────
     root_state[ids, :3]   = pivot_world + rotated_offset
