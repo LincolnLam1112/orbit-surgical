@@ -242,9 +242,16 @@ class CurriculumCfg:
 
 @configclass
 class PivotJointCfg:
-    """Config for pinning the needle to the pivot via D6 joint."""
-    mode: str = "HINGE"          # "WELD" or "HINGE"
+    """
+    Configuration for pinning the needle to the pivot.  Besides the joint
+    type (weld or hinge) and the axis selection this class also exposes
+    `anchor_offset_local` so that the anchor point used by the joint can be
+    customised.  When left as ``None`` the offset will be taken from the
+    needle's spawn pose relative to the pivot.
+    """
+    mode: str = "HINGE"           # "WELD" or "HINGE"
     hinge_axis: str = "needle_x"  # "world_x|y|z" or "needle_x|y|z"
+    anchor_offset_local: tuple[float, float, float] | None = None
 
 
 @configclass

@@ -421,55 +421,55 @@ def path_following_reward(env):
     # wrong_side_penalty = live_align_2 & ((wrong_dist_blue > live_blue_dist) | (wrong_dist_yellow > live_yellow_dist))
     # # reward[wrong_side_penalty] += 5.0
 
-    # --- Minimal joint-movement penalty ---
-    q = env.scene["robot_1"].data.joint_pos                # (N, DoF)
-    if not hasattr(env, "_prev_q"):
-        env._prev_q = q.clone()
+    # # --- Minimal joint-movement penalty ---
+    # q = env.scene["robot_1"].data.joint_pos                # (N, DoF)
+    # if not hasattr(env, "_prev_q"):
+    #     env._prev_q = q.clone()
 
-    dq = q - env._prev_q                                   # Δq_t
-    reward -= 0.01 * torch.sum(dq * dq, dim=1)              # L2^2 penalty (tune 0.1)
+    # dq = q - env._prev_q                                   # Δq_t
+    # reward -= 0.01 * torch.sum(dq * dq, dim=1)              # L2^2 penalty (tune 0.1)
 
-    env._prev_q = q.clone()
+    # env._prev_q = q.clone()
 
-    # Z penalty for dropping
-    z_drop_orient = (needle_z < 0.13) | (needle_z > 0.145)
-    drop_ids = torch.nonzero(z_drop_orient, as_tuple=False).squeeze(-1)
-    reward[drop_ids] -= 2.0
+    # # Z penalty for dropping
+    # z_drop_orient = (needle_z < 0.13) | (needle_z > 0.145)
+    # drop_ids = torch.nonzero(z_drop_orient, as_tuple=False).squeeze(-1)
+    # reward[drop_ids] -= 2.0
 
-    # --- Action smoothness penalties (Δu and jerk) ------------------------------
-    # Hard-coded knobs (no launcher/config needed)
-    LAM_DIFF = 0.015   # weight for first difference penalty  ||a_t - a_{t-1}||^2
-    LAM_JERK = 0.0125   # weight for second difference penalty ||a_t - 2a_{t-1} + a_{t-2}||^2
+    # # --- Action smoothness penalties (Δu and jerk) ------------------------------
+    # # Hard-coded knobs (no launcher/config needed)
+    # LAM_DIFF = 0.015   # weight for first difference penalty  ||a_t - a_{t-1}||^2
+    # LAM_JERK = 0.0125   # weight for second difference penalty ||a_t - 2a_{t-1} + a_{t-2}||^2
 
-    # Get the concatenated action tensor from IsaacLab's ActionManager
-    actions = getattr(getattr(env, "action_manager", None), "action", None)  # shape: [num_envs, act_dim]
-    if actions is not None:
-        # Initialize buffers on first call
-        if not hasattr(env, "_sm_prev_action"):
-            env._sm_prev_action = actions.clone()          # a_{t-1}
-            env._sm_prev_prev_action = actions.clone()     # a_{t-2}
+    # # Get the concatenated action tensor from IsaacLab's ActionManager
+    # actions = getattr(getattr(env, "action_manager", None), "action", None)  # shape: [num_envs, act_dim]
+    # if actions is not None:
+    #     # Initialize buffers on first call
+    #     if not hasattr(env, "_sm_prev_action"):
+    #         env._sm_prev_action = actions.clone()          # a_{t-1}
+    #         env._sm_prev_prev_action = actions.clone()     # a_{t-2}
 
-        # First difference (velocity of actions)
-        diff = actions - env._sm_prev_action                     # a_t - a_{t-1}
-        diff_sq = torch.sum(diff * diff, dim=1)                  # ||·||^2 per env
+    #     # First difference (velocity of actions)
+    #     diff = actions - env._sm_prev_action                     # a_t - a_{t-1}
+    #     diff_sq = torch.sum(diff * diff, dim=1)                  # ||·||^2 per env
 
-        # Second difference (discrete jerk of actions)
-        jerk = actions - 2.0 * env._sm_prev_action + env._sm_prev_prev_action
-        jerk_sq = torch.sum(jerk * jerk, dim=1)
+    #     # Second difference (discrete jerk of actions)
+    #     jerk = actions - 2.0 * env._sm_prev_action + env._sm_prev_prev_action
+    #     jerk_sq = torch.sum(jerk * jerk, dim=1)
 
-        # Add *negative* penalties to reward
-        reward += (-LAM_DIFF) * diff_sq
-        reward += (-LAM_JERK) * jerk_sq
+    #     # Add *negative* penalties to reward
+    #     reward += (-LAM_DIFF) * diff_sq
+    #     reward += (-LAM_JERK) * jerk_sq
 
-        # Update history
-        env._sm_prev_prev_action = env._sm_prev_action.clone()
-        env._sm_prev_action = actions.clone()
+    #     # Update history
+    #     env._sm_prev_prev_action = env._sm_prev_action.clone()
+    #     env._sm_prev_action = actions.clone()
 
-        # Optional: lightweight telemetry for logging
-        if not hasattr(env, "extras"):
-            env.extras = {}
-        env.extras["a_diff_l2_mean"] = diff_sq.mean().item()
-        env.extras["a_jerk_l2_mean"] = jerk_sq.mean().item()
+    #     # Optional: lightweight telemetry for logging
+    #     if not hasattr(env, "extras"):
+    #         env.extras = {}
+    #     env.extras["a_diff_l2_mean"] = diff_sq.mean().item()
+    #     env.extras["a_jerk_l2_mean"] = jerk_sq.mean().item()
 
     # print(env.mode_flags)
 
