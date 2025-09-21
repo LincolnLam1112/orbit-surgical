@@ -201,6 +201,7 @@ def path_following_reward(env):
 
         final_step = live_align[active_ids_0] & final_reached
         reward[active_ids_0] += 5.0 * final_step.float()
+        # print(env.mode_flags, env.current_path_index)
 
     #    needle_drift = torch.norm(obj.data.root_lin_vel_w[active_ids_0], dim=1)
     #    drift_penalty_mask = (needle_drift > 0.05) & live_align_2[active_ids_0]

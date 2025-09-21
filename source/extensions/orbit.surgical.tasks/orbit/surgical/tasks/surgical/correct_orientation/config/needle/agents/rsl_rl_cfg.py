@@ -12,7 +12,7 @@ from .cmo_ppo_cfg import CMOPPOAlgorithmCfg
 @configclass
 class CorrOrientationPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
-    max_iterations = 750
+    max_iterations = 500
     save_interval = 50
     experiment_name = "correct_needle_orientation"
     empirical_normalization = False

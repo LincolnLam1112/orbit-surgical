@@ -160,6 +160,7 @@ def main():
             actions = policy(obs)
             # env stepping
             obs, _, _, _ = env.step(actions)
+            # print(actions)
             # print(obs)
 
     # close the simulator

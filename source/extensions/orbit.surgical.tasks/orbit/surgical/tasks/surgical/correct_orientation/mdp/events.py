@@ -179,7 +179,8 @@ def reset_needle_about_pivot_xz(env, env_ids: Optional[torch.Tensor] = None) -> 
     root_state = needle.data.root_state_w.clone()  # (num_envs, 13)
 
     # ── CONSTANTS (LOCAL → per-env world) ───────────────────────────────────
-    pivot_local  = torch.tensor([-0.200, 0.1435, 0.1505], device=device)   # env frame
+    # pivot_local  = torch.tensor([-0.200, 0.1435, 0.1505], device=device)   # env frame
+    pivot_local  = torch.tensor([-0.200, 0.1435, 0.05], device=device)   # env frame
     offset_local = torch.tensor([ 0.005, 0.000 , -0.010], device=device)
     # q_init       = torch.tensor([0.66446, 0.66446, -0.24184, 0.24184], device=device)  # (w,x,y,z)
     q_init = torch.tensor([0.7071, 0.7071, 0.0, 0.0], device=device)
@@ -192,8 +193,8 @@ def reset_needle_about_pivot_xz(env, env_ids: Optional[torch.Tensor] = None) -> 
     x_deg = torch.empty(0, device=device)
     while z_deg.numel() < N or x_deg.numel() < N:
         z_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)  # Z first
-        x_deg = torch.empty(N, device=device).uniform_(-40.0, 40.0)  # X second
-        # x_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)  # X second
+        # x_deg = torch.empty(N, device=device).uniform_(-40.0, 40.0)  # X second
+        x_deg = torch.empty(N, device=device).uniform_(-5.0, 5.0)  # X second
     z_deg = z_deg[:N]
     x_deg = x_deg[:N]
     z_half = torch.deg2rad(z_deg) * 0.5
@@ -319,16 +320,16 @@ def reset_mode_flags(env, env_ids: torch.Tensor | None = None):
         env.current_path_index_2[ids] = 0
 
 
-    # if not hasattr(env, "reference_path"):
-    #     env.reference_path = torch.zeros((env.num_envs, 10, 3), device=env.device)
-    #     env.reference_path_blue = torch.zeros((env.num_envs, 10, 3), device=env.device)
-    #     env.reference_path_yellow = torch.zeros((env.num_envs, 10, 3), device=env.device)
-    # else:
-    #     env.reference_path[ids] = 0
-    #     if hasattr(env, "reference_path_blue"):
-    #         env.reference_path_blue[ids] = 0
-    #     if hasattr(env, "reference_path_yellow"):
-    #         env.reference_path_yellow[ids] = 0
+    if not hasattr(env, "reference_path"):
+        env.reference_path = torch.zeros((env.num_envs, 10, 3), device=env.device)
+        env.reference_path_blue = torch.zeros((env.num_envs, 10, 3), device=env.device)
+        env.reference_path_yellow = torch.zeros((env.num_envs, 10, 3), device=env.device)
+    else:
+        env.reference_path[ids] = 0
+        if hasattr(env, "reference_path_blue"):
+            env.reference_path_blue[ids] = 0
+        if hasattr(env, "reference_path_yellow"):
+            env.reference_path_yellow[ids] = 0
 
     if not hasattr(env, "reference_path_2"):
         env.reference_path_2 = torch.zeros((env.num_envs, 3, 3), device=env.device)

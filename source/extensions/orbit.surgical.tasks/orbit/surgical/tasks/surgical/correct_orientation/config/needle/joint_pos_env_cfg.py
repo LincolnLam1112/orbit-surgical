@@ -78,7 +78,8 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
         self.scene.needle_pivot_xform = RigidObjectCfg(
             prim_path="{ENV_REGEX_NS}/NeedlePivot",
             init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(-0.2, 0.1435, 0.1505),
+                # pos=(-0.200, 0.1435, 0.1505),
+                pos=(-0.2, 0.1435, 0.05),
                 rot=(1.0, 0.0, 0.0, 0.0),
             ),
             spawn=UsdFileCfg(
@@ -87,10 +88,10 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
                 rigid_props=RigidBodyPropertiesCfg(
                     kinematic_enabled=True,
                     disable_gravity=True,
-                    solver_position_iteration_count=4,
-                    solver_velocity_iteration_count=1,
-                    max_linear_velocity=0.0,
-                    max_angular_velocity=0.0,
+                    solver_position_iteration_count=16,
+                    solver_velocity_iteration_count=8,
+                    max_linear_velocity=200,
+                    max_angular_velocity=200.0,
                 ),
             ),
         )
@@ -109,8 +110,8 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
                 usd_path=f"{ORBITSURGICAL_ASSETS_DATA_DIR}/Props/Surgical_needle/needle_sdf.usda",
                 scale=(500.0, 500.0, 500.0),
                 rigid_props=RigidBodyPropertiesCfg(
-                    solver_position_iteration_count=4,
-                    solver_velocity_iteration_count=1,
+                    solver_position_iteration_count=16,
+                    solver_velocity_iteration_count=8,
                     max_angular_velocity=50.0,
                     max_linear_velocity=50.0,
                     max_depenetration_velocity=0.2,

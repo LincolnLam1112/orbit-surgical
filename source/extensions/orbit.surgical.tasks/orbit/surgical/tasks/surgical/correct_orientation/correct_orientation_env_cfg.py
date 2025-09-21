@@ -221,10 +221,10 @@ class TerminationsCfg:
         func=mdp.root_height_below_minimum, params={"minimum_height": -0.05, "asset_cfg": SceneEntityCfg("object")}
     )
 
-    needle_fell = DoneTerm(
-        func=mdp.needle_below_table,
-        time_out=False
-    )
+    # needle_fell = DoneTerm(
+    #     func=mdp.needle_below_table,
+    #     time_out=False
+    # )
 
     # phase1 = DoneTerm(
     #     func=mdp.reach_phase_success,
