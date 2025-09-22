@@ -4,6 +4,7 @@ from typing import Optional
 from .shared_phase_flags import get_mode_flags
 from .visualization import _contact_point_world, ee_contact_point_world, quat_to_rot_matrix, visualize_reference_path
 from .path_generator import LinearPathGenerator
+from .joint_utils import set_hinge_target_to_current
 
 
 def _active_ids(env, env_ids):
@@ -193,8 +194,8 @@ def reset_needle_about_pivot_xz(env, env_ids: Optional[torch.Tensor] = None) -> 
     x_deg = torch.empty(0, device=device)
     while z_deg.numel() < N or x_deg.numel() < N:
         z_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)  # Z first
-        # x_deg = torch.empty(N, device=device).uniform_(-40.0, 40.0)  # X second
-        x_deg = torch.empty(N, device=device).uniform_(-5.0, 5.0)  # X second
+        x_deg = torch.empty(N, device=device).uniform_(-40.0, 40.0)  # X second
+        # x_deg = torch.empty(N, device=device).uniform_(0.0, 0.0)  # X second
     z_deg = z_deg[:N]
     x_deg = x_deg[:N]
     z_half = torch.deg2rad(z_deg) * 0.5
@@ -233,16 +234,6 @@ def reset_needle_about_pivot_xz(env, env_ids: Optional[torch.Tensor] = None) -> 
         W1*Z2 + X1*Y2 - Y1*X2 + Z1*W2
     ], dim=1)
 
-    # # ── total orientation: q_final = q_init ∘ q_delta  (LOCAL frame) ───────────
-    # Wb, Xb, Yb, Zb = q_delta.T           # batch
-    # w0, x0, y0, z0 = q_init              # scalars
-    # q_final = torch.stack([
-    #     w0*Wb - x0*Xb - y0*Yb - z0*Zb,
-    #     w0*Xb + x0*Wb + y0*Zb - z0*Yb,
-    #     w0*Yb - x0*Zb + y0*Wb + z0*Xb,
-    #     w0*Zb + x0*Yb - y0*Xb + z0*Wb
-    # ], dim=1)
-
     # ── rotate offset vector by q_delta (same “fast” formula you used) ─────
     u = q_delta[:, 1:]             # (N,3)
     s = q_delta[:, :1]             # (N,1)
@@ -253,21 +244,17 @@ def reset_needle_about_pivot_xz(env, env_ids: Optional[torch.Tensor] = None) -> 
         + (s * s - (u * u).sum(1, keepdim=True)) * offset \
         + 2 * s * torch.cross(u, offset, dim=1)   # (N,3)
 
-    # # ── rotate offset vector by q_final (LOCAL) ────────────────────────────────
-    # u = q_final[:, 1:]                   # (N,3)
-    # s = q_final[:, :1]                   # (N,1)
-    # offset = offset_local.expand(N, 3)
-    # dot = (u * offset).sum(1, keepdim=True)
-    # rotated_offset = (2 * dot) * u \
-    #     + (s * s - (u * u).sum(1, keepdim=True)) * offset \
-    #     + 2 * s * torch.cross(u, offset, dim=1)
-
     # ── write new pose ─────────────────────────────────────────────────────
     root_state[ids, :3]   = pivot_world + rotated_offset
     root_state[ids, 3:7]  = q_final
     root_state[ids, 7:13].zero_()   # zero velocities
     env.initial_needle_pos = needle.data.root_pos_w.clone()
     needle.write_root_state_to_sim(root_state[ids], env_ids=ids)
+
+    for eid in ids.tolist():
+        # optional now (since we’re not using targetPosition), but helpful for debug
+        handle = getattr(env, "_pivot_joint_handles", [None]*env.num_envs)[int(eid)]
+        print("[hinge] env", int(eid), "joint prim:", handle)
 
 
 def reset_mode_flags(env, env_ids: torch.Tensor | None = None):

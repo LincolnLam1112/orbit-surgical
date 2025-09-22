@@ -116,8 +116,9 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
                     max_linear_velocity=50.0,
                     max_depenetration_velocity=0.2,
                     linear_damping=0.5,
-                    angular_damping=0.5,
-                    disable_gravity=True,
+                    angular_damping=150.0,
+                    kinematic_enabled=False,     # ← add this
+                    disable_gravity=False,
                 ),
             ),
             debug_vis=False,

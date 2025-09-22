@@ -14,6 +14,59 @@ except Exception:
 # add near top
 from pxr import Usd, UsdPhysics, Gf, Sdf
 
+
+def _quat_conj(q):  # q: (4,)
+    return torch.tensor([ q[0], -q[1], -q[2], -q[3]], device=q.device)
+
+def _quat_mul(a, b):  # both (4,)
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return torch.stack([
+        aw*bw - ax*bx - ay*by - az*bz,
+        aw*bx + ax*bw + ay*bz - az*by,
+        aw*by - ax*bz + ay*bw + az*bx,
+        aw*bz + ax*by - ay*bx + az*bw
+    ])
+
+def _twist_angle_x(q_rel):  # radians; extract twist about X from relative quat
+    w, x, y, z = q_rel
+    denom = torch.sqrt(w*w + x*x).clamp(min=1e-9)
+    w_t =  w / denom
+    x_t =  x / denom
+    # sign preserves rotation direction around +X
+    ang = 2.0 * torch.atan2(x_t, w_t)
+    return ang.item()
+
+def set_hinge_target_to_current(env, eid: int, axis="X"):
+    # resolve joint prim path (we stored it when creating the hinge)
+    joint_handle = getattr(env, "_pivot_joint_handles", [None]*env.num_envs)[eid]
+    if not joint_handle:
+        # fallback to constructed path
+        pivot = env.scene["needle_pivot_xform"]
+        pivot_path = pivot.cfg.prim_path.replace("{ENV_REGEX_NS}", f"{getattr(env.scene,'env_ns','/World/envs/env')}_{eid}")
+        joint_handle = f"{pivot_path}/PivotHingeJoint_{eid}"
+
+    jprim = env.scene.stage.GetPrimAtPath(joint_handle)
+    if not jprim or not jprim.IsValid():
+        print(f"[hinge] joint prim not found for env {eid}: {joint_handle}")
+        return
+
+    # world quats (w,x,y,z)
+    pivot_q  = env.scene["needle_pivot_xform"].data.root_quat_w[eid]
+    needle_q = env.scene["object"].data.root_quat_w[eid]
+    q_rel = _quat_mul(_quat_conj(pivot_q), needle_q)  # pivot->needle
+
+    if axis.upper() != "X":
+        print("[hinge] only X axis supported in this helper")
+    target = _twist_angle_x(q_rel)
+
+    drv = UsdPhysics.DriveAPI(jprim, UsdPhysics.Tokens.angular)
+    if not drv:
+        drv = UsdPhysics.DriveAPI.Apply(jprim, UsdPhysics.Tokens.angular)
+    drv.GetTargetPositionAttr().Set(float(target))
+    # keep your small stiffness/damping/maxForce so gripper can overcome
+    print(f"[hinge] env {eid} targetPosition set to {target:.3f} rad")
+
 def _quat_apply(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     vq = torch.cat([torch.zeros_like(v[..., :1]), v], dim=-1)
     return _quat_multiply(_quat_multiply(q, vq), _quat_conjugate(q))[..., 1:4]
@@ -49,20 +102,40 @@ def _create_usd_weld_joint(env, eid: int,
     _usd_set_local_pose(j, body0_prim_path, body1_prim_path, p0_l, q0_l, p1_l, q1_l)
     return joint_path
 
+from pxr import PhysxSchema
+
 def _create_usd_hinge_joint(env, eid: int,
                             body0_prim_path: str, body1_prim_path: str,
                             p0_l: torch.Tensor, q0_l: torch.Tensor,
                             p1_l: torch.Tensor, q1_l: torch.Tensor,
-                            axis: str = "X"):
+                            axis: str = "X",
+                            hold_stiffness: float = 0.0,
+                            hold_damping: float = 2.0,
+                            hold_max_torque: float = 0.0000001):
     stage = env.scene.stage
     joint_path = f"{body0_prim_path}/PivotHingeJoint_{eid}"
     j = _usd_define_joint_prim(stage, joint_path, "revolute")
     _usd_set_local_pose(j, body0_prim_path, body1_prim_path, p0_l, q0_l, p1_l, q1_l)
-    # Axis can be "X", "Y", or "Z"
-    axis_token = getattr(UsdPhysics.Tokens, axis.lower())  # <- lowercase
+    axis_token = getattr(UsdPhysics.Tokens, axis.lower())
     j.CreateAxisAttr().Set(axis_token)
-    # Lock limits if you want no range (pure hinge with free rotation):
-    # j.CreateLowerLimitAttr().Set(0.0); j.CreateUpperLimitAttr().Set(0.0)  # (omit to keep free)
+
+    # Low-torque “holding brake”: keeps the randomized angle under gravity,
+    # but yields when the gripper applies enough torque.
+    drive = UsdPhysics.DriveAPI.Apply(j.GetPrim(), UsdPhysics.Tokens.angular)
+    drive.CreateTargetPositionAttr().Set(0.0)                  # current pose == 0
+    drive.CreateStiffnessAttr().Set(float(hold_stiffness))     # Kp
+    drive.CreateDampingAttr().Set(float(hold_damping))         # Kd
+    drive.CreateMaxForceAttr().Set(float(hold_max_torque))     # Nm cap (let gripper win)
+    drive.CreateTargetVelocityAttr().Set(0.0) 
+
+    # Debug print so you know it actually authored:
+    # try:
+    #     print("[DEBUG] Hinge created (no PhysxSchema):",
+    #           "stiffness=", drive.GetStiffnessAttr().Get(),
+    #           "damping=", drive.GetDampingAttr().Get(),
+    #           "max_force=", drive.GetMaxForceAttr().Get())
+    # except Exception:
+    #     pass
     return joint_path
 
 # ----------------------------
@@ -259,12 +332,15 @@ def create_pivot_joint(
                 pivot = env.scene["needle_pivot_xform"]
                 needle = env.scene["object"]
 
+
                 # Prefer cfg.prim_path; if you already got a string from elsewhere, pass it in here.
                 pivot_path_tmpl  = getattr(pivot.cfg,  "prim_path",  "")
                 needle_path_tmpl = getattr(needle.cfg, "prim_path",  "")
 
+
                 pivot_path  = _expand_env_path(pivot_path_tmpl,  env, eid)
                 needle_path = _expand_env_path(needle_path_tmpl, env, eid)
+
 
                 # Debug (first env)
                 if eid == 0:
@@ -275,6 +351,7 @@ def create_pivot_joint(
                         # print("[joint_utils] pivot_path:", pivot_path)
                         # print("[joint_utils] needle_path:", needle_path)
 
+
                 if mode.upper() == "WELD":
                     joint_prim_path = _create_usd_weld_joint(env, eid, pivot_path, needle_path,
                                                             p_pos_l, p_quat_l, n_pos_l, n_quat_l)
@@ -283,6 +360,7 @@ def create_pivot_joint(
                     joint_prim_path = _create_usd_hinge_joint(env, eid, pivot_path, needle_path,
                                                             p_pos_l, p_quat_l, n_pos_l, n_quat_l,
                                                             axis="X")
+
 
                 env._pivot_joint_handles[eid] = joint_prim_path  # store the path as handle
                 env._pivot_joint_active[eid] = True
