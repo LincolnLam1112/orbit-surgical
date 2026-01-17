@@ -96,7 +96,7 @@ def main():
     # # knobs (tweak these to feel the effect)
     # ALPHA = 1.0           # closer to 0 = heavier smoothing
     # REPEAT = 1             # 1 = no repeat; 2+ = hold output for k-1 steps
-    # SLEW  = 0.15           # per-dim max delta per step; 0 disables
+    # SLEW  = 0.25           # per-dim max delta per step; 0 disables
 
     # step_i = 0
 

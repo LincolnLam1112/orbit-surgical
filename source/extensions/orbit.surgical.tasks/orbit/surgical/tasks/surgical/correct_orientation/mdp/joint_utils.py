@@ -38,17 +38,13 @@ def _twist_angle_x(q_rel):  # radians; extract twist about X from relative quat
     return ang.item()
 
 def set_hinge_target_to_current(env, eid: int, axis="X"):
-    # resolve joint prim path (we stored it when creating the hinge)
-    joint_handle = getattr(env, "_pivot_joint_handles", [None]*env.num_envs)[eid]
-    if not joint_handle:
-        # fallback to constructed path
-        pivot = env.scene["needle_pivot_xform"]
-        pivot_path = pivot.cfg.prim_path.replace("{ENV_REGEX_NS}", f"{getattr(env.scene,'env_ns','/World/envs/env')}_{eid}")
-        joint_handle = f"{pivot_path}/PivotHingeJoint_{eid}"
-
-    jprim = env.scene.stage.GetPrimAtPath(joint_handle)
+    joint_path = getattr(env, "_pivot_joint_handles", [None]*env.num_envs)[eid]
+    if not joint_path:
+        pivot_path = _expand_env_path(env.scene["needle_pivot_xform"].cfg.prim_path, env, eid)
+        joint_path = f"{pivot_path}/PivotHingeJoint_{eid}"
+    jprim = env.scene.stage.GetPrimAtPath(joint_path)
     if not jprim or not jprim.IsValid():
-        print(f"[hinge] joint prim not found for env {eid}: {joint_handle}")
+        print(f"[hinge] joint prim not found for env {eid}: {joint_path}")
         return
 
     # world quats (w,x,y,z)
@@ -63,9 +59,17 @@ def set_hinge_target_to_current(env, eid: int, axis="X"):
     drv = UsdPhysics.DriveAPI(jprim, UsdPhysics.Tokens.angular)
     if not drv:
         drv = UsdPhysics.DriveAPI.Apply(jprim, UsdPhysics.Tokens.angular)
+
     drv.GetTargetPositionAttr().Set(float(target))
-    # keep your small stiffness/damping/maxForce so gripper can overcome
-    print(f"[hinge] env {eid} targetPosition set to {target:.3f} rad")
+    drv.CreateStiffnessAttr().Set(float(0.0))     # Kp
+    drv.CreateDampingAttr().Set(float(0.0))         # Kd
+    drv.CreateMaxForceAttr().Set(float(0.0))     # Nm cap (let gripper win)
+    drv.CreateTargetVelocityAttr().Set(0.0)
+    drv.CreateTargetPositionAttr().Set(0.0)                  # current pose == 0
+
+    # 👇 Debug: immediately read back what you just wrote
+    actual = drv.GetTargetPositionAttr().Get()
+    # print(f"[hinge] env {eid}: set target={target:.3f} rad, attr now={actual:.3f} rad")
 
 def _quat_apply(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     vq = torch.cat([torch.zeros_like(v[..., :1]), v], dim=-1)
@@ -110,8 +114,8 @@ def _create_usd_hinge_joint(env, eid: int,
                             p1_l: torch.Tensor, q1_l: torch.Tensor,
                             axis: str = "X",
                             hold_stiffness: float = 0.0,
-                            hold_damping: float = 2.0,
-                            hold_max_torque: float = 0.0000001):
+                            hold_damping: float = 0.0,
+                            hold_max_torque: float = 0.0):
     stage = env.scene.stage
     joint_path = f"{body0_prim_path}/PivotHingeJoint_{eid}"
     j = _usd_define_joint_prim(stage, joint_path, "revolute")
@@ -121,12 +125,14 @@ def _create_usd_hinge_joint(env, eid: int,
 
     # Low-torque “holding brake”: keeps the randomized angle under gravity,
     # but yields when the gripper applies enough torque.
-    drive = UsdPhysics.DriveAPI.Apply(j.GetPrim(), UsdPhysics.Tokens.angular)
-    drive.CreateTargetPositionAttr().Set(0.0)                  # current pose == 0
-    drive.CreateStiffnessAttr().Set(float(hold_stiffness))     # Kp
-    drive.CreateDampingAttr().Set(float(hold_damping))         # Kd
-    drive.CreateMaxForceAttr().Set(float(hold_max_torque))     # Nm cap (let gripper win)
-    drive.CreateTargetVelocityAttr().Set(0.0) 
+    # drive = UsdPhysics.DriveAPI.Apply(j.GetPrim(), UsdPhysics.Tokens.angular)
+
+    # drive.CreateStiffnessAttr().Set(float(hold_stiffness))     # Kp
+    # drive.CreateDampingAttr().Set(float(hold_damping))         # Kd
+    # drive.CreateMaxForceAttr().Set(float(hold_max_torque))     # Nm cap (let gripper win)
+    # drive.CreateTargetVelocityAttr().Set(0.0)
+
+    # drive.CreateTargetPositionAttr().Set(0.0)                  # current pose == 0
 
     # Debug print so you know it actually authored:
     # try:
@@ -241,11 +247,12 @@ def _axis_world_from_choice(needle_quat_w: torch.Tensor, hinge_axis: str, device
 def create_pivot_joint(
     env,
     env_ids: Sequence[int],
-    mode: str = "WELD",                  # "WELD" or "HINGE"
+    mode: str = "HINGE",
     hinge_axis: Optional[str] = "needle_x",
     pivot_key: str = "needle_pivot_xform",
     needle_key: str = "object",
-    anchor_offset_local=(0.03, 0.042, 0.0),
+    anchor_offset_local: Optional[tuple[float, float, float]] = None,   # CHANGED: default None
+    anchor_frame: str = "needle",
 ) -> None:
     
     """
@@ -283,10 +290,23 @@ def create_pivot_joint(
         needle_pos_w  = needle.data.root_pos_w[eid]   # world position (3,)
         needle_quat_w = needle.data.root_quat_w[eid]  # world orientation (w,x,y,z)
 
-        off_l = torch.tensor(anchor_offset_local, device=env.device)
+        # Derive or use provided local anchor offset (put this before computing anchor_w)
+        if anchor_offset_local is None:
+            # off_l = R(pivot)^T * (needle_pos - pivot_pos)
+            rel_w = needle_pos_w - pivot_pos_w
+            off_l = _quat_apply(_quat_conjugate(pivot_quat_w), rel_w)
+            print("default offset!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        elif anchor_frame == "needle":
+            # NEW: Interpret offset in needle's local frame
+            off_l_needle = torch.tensor(anchor_offset_local, device=env.device)
+            offset_world = _quat_apply(needle_quat_w, off_l_needle)
+            anchor_w = needle_pos_w + offset_world
+            # print("needle frame!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        else:
+            off_l = torch.tensor(anchor_offset_local, device=env.device)
+            anchor_w = pivot_pos_w + _quat_apply(pivot_quat_w, off_l)
+            print("pivot frame!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 
-        # world anchor = pivot_pos + R(pivot_quat) * offset_local
-        anchor_w = pivot_pos_w + _quat_apply(pivot_quat_w, off_l)
         axis_w = None
         if mode.upper() == "HINGE":
             axis_w = _axis_world_from_choice(needle.data.root_quat_w[eid], hinge_axis, device)
@@ -338,15 +358,15 @@ def create_pivot_joint(
                 needle_path_tmpl = getattr(needle.cfg, "prim_path",  "")
 
 
-                pivot_path  = _expand_env_path(pivot_path_tmpl,  env, eid)
-                needle_path = _expand_env_path(needle_path_tmpl, env, eid)
+                pivot_path  = _expand_env_path(env.scene["needle_pivot_xform"].cfg.prim_path, env, eid)  # .../NeedlePivot
+                needle_path = _expand_env_path(env.scene["object"].cfg.prim_path,              env, eid)  # .../Needle
 
 
-                # Debug (first env)
-                if eid == 0:
-                    if hasattr(env, "logger"):
-                        env.logger.info(f"[joint_utils] env {eid} pivot_path={pivot_path}")
-                        env.logger.info(f"[joint_utils] env {eid} needle_path={needle_path}")
+                # # Debug (first env)
+                # if eid == 0:
+                #     if hasattr(env, "logger"):
+                #         env.logger.info(f"[joint_utils] env {eid} pivot_path={pivot_path}")
+                #         env.logger.info(f"[joint_utils] env {eid} needle_path={needle_path}")
                     # else:
                         # print("[joint_utils] pivot_path:", pivot_path)
                         # print("[joint_utils] needle_path:", needle_path)
@@ -367,8 +387,9 @@ def create_pivot_joint(
         except Exception as exc:
             print(f"[joint_utils] Failed to create pivot joint for env {eid}: {exc}")
 
-        env._pivot_joint_handles[eid] = handle
-        env._pivot_joint_active[eid] = bool(handle)
+        if handle:
+            env._pivot_joint_handles[eid] = handle
+            env._pivot_joint_active[eid] = True
         if hasattr(env, "logger") and handle:
             env.logger.info(
                 f"[PivotJoint] Env {eid}: Created at {anchor_w.cpu().numpy()}, "
@@ -391,14 +412,34 @@ def destroy_pivot_joint(env, env_ids):
             env._pivot_joint_active[eid] = False
 
 
+# def setup_needle_pivot_joint(env, env_ids, mode: str | None = None, hinge_axis: str | None = None) -> None:
+#     # pull defaults from cfg if not provided
+#     if mode is None and hasattr(env, "cfg") and hasattr(env.cfg, "pivot_joint"):
+#         mode = getattr(env.cfg.pivot_joint, "mode", "WELD")
+#     if hinge_axis is None and hasattr(env, "cfg") and hasattr(env.cfg, "pivot_joint"):
+#         hinge_axis = getattr(env.cfg.pivot_joint, "hinge_axis", "needle_x")
+#     # env_ids is provided by EventManager; create joints for exactly these envs
+#     create_pivot_joint(env, env_ids, mode=mode or "HINGE", hinge_axis=hinge_axis or "needle_x")
+
+
 def setup_needle_pivot_joint(env, env_ids, mode: str | None = None, hinge_axis: str | None = None) -> None:
     # pull defaults from cfg if not provided
     if mode is None and hasattr(env, "cfg") and hasattr(env.cfg, "pivot_joint"):
-        mode = getattr(env.cfg.pivot_joint, "mode", "WELD")
+        mode = getattr(env.cfg.pivot_joint, "mode", "HINGE")
     if hinge_axis is None and hasattr(env, "cfg") and hasattr(env.cfg, "pivot_joint"):
         hinge_axis = getattr(env.cfg.pivot_joint, "hinge_axis", "needle_x")
-    # env_ids is provided by EventManager; create joints for exactly these envs
-    create_pivot_joint(env, env_ids, mode=mode or "WELD", hinge_axis=hinge_axis or "needle_x")
+
+    # NEW: forward anchor from cfg (single source of truth)
+    anchor_off = None
+    if hasattr(env, "cfg") and hasattr(env.cfg, "pivot_joint"):
+        anchor_off = getattr(env.cfg.pivot_joint, "anchor_offset_local", None)
+
+    create_pivot_joint(
+        env, env_ids,
+        mode=mode or "HINGE",
+        hinge_axis=hinge_axis or "needle_x",
+        anchor_offset_local=anchor_off,
+    )
 
 
 def teardown_needle_pivot_joint(env, env_ids) -> None:
@@ -457,3 +498,11 @@ def _get_env_prim_path(asset, eid: int) -> str:
         f"Cannot determine prim path for asset {type(asset).__name__}. "
         f"Expected asset.cfg.prim_path to be set (with '{{ENV_REGEX_NS}}')."
     )
+
+# ---- joint_utils.py (add near your other public helpers) ----
+def update_hinge_targets_after_reset(env, env_ids, axis="X"):
+    """Call this after you randomize root state on reset."""
+    if isinstance(env_ids, int):
+        env_ids = [env_ids]
+    for eid in env_ids:
+        set_hinge_target_to_current(env, eid, axis=axis)

@@ -9,6 +9,7 @@ from isaaclab.utils.math import subtract_frame_transforms
 from .visualization import *
 from .visualization import _contact_point_world
 from .shared_phase_flags import get_mode_flags
+from .events import reset_goal_about_pivot_xz
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -116,9 +117,6 @@ def center_to_path(env) -> torch.Tensor:
     # Direction vector to current target
     vec_to_path = ref_center - ee_center  # (N,3)
 
-    # still_active = (path_idx < max_step)
-    # vec_to_path[~still_active] = 0.0  # Mask to zero if not active
-
     return vec_to_path
 
 
@@ -148,11 +146,7 @@ def blue_to_path(env) -> torch.Tensor:
     # Direction vector to current target
     vec_to_path = ref_blue - blue_tip  # (N,3)
 
-    # still_active = (path_idx < max_step)
-    # vec_to_path[~still_active] = 0.0  # Mask to zero if not active
-
     return vec_to_path
-
 
 def yellow_to_path(env) -> torch.Tensor:
     """
@@ -186,94 +180,168 @@ def yellow_to_path(env) -> torch.Tensor:
     # Direction vector from tip → target
     vec_to_path = ref_yellow - yellow_tip  # (N,3)
 
-    # still_active = (path_idx < max_step)
-    # vec_to_path[~still_active] = 0.0  # Mask to zero if not active
-
     return vec_to_path
 
 
-def blue_to_path_2(env) -> torch.Tensor:
-    device = env.device
-    N = env.num_envs
-
-    ee_frame = env.scene["ee_1_frame"]
-    ee_center = ee_contact_point_world(ee_frame, device)
-    grip_quat = ee_frame.data.target_quat_w[..., 0, :]
-    grip_rot = quat_to_rot_matrix(grip_quat)
-    blue_tip = ee_center + torch.bmm(
-        grip_rot,
-        torch.tensor([0.0045, 0.0, 0.0], device=device).expand(N, 3).unsqueeze(-1)
-    ).squeeze(-1)
-
-    if not hasattr(env, "reference_path_2") or not hasattr(env, "current_path_index_2"):
+def center_to_arc_path(env) -> torch.Tensor:
+    device, N = env.device, env.num_envs
+    if (not hasattr(env, "reference_path_2_center")) or (not hasattr(env, "current_path_index_2")):
         return torch.zeros((N, 3), device=device)
-
-    ref_path = env.reference_path_2
-    path_idx = env.current_path_index_2
-    if ref_path.numel() == 0 or torch.all(ref_path == 0):
-        return torch.zeros(N, 3, device=device)
-    max_step = max(ref_path.shape[1] - 1, 0)
-    safe_idx = torch.clamp(path_idx, min=0, max=max_step)
-
-    ref_blue = ref_path[torch.arange(N, device=device), safe_idx]
-
-    # Direction vector to current target
-    vec_to_path = ref_blue - blue_tip  # (N,3)
-
-    return vec_to_path
-
-
-def yellow_to_path_2(env) -> torch.Tensor:
-    device = env.device
-    N = env.num_envs
-
-    ee_frame = env.scene["ee_1_frame"]
-    ee_center = ee_contact_point_world(ee_frame, device)
-    grip_quat = ee_frame.data.target_quat_w[..., 0, :]
-    grip_rot = quat_to_rot_matrix(grip_quat)
-    yellow_tip = ee_center + torch.bmm(
-        grip_rot,
-        torch.tensor([-0.0045, 0.0, 0.0], device=device).expand(N, 3).unsqueeze(-1)
-    ).squeeze(-1)
-
-    if not hasattr(env, "reference_path_2") or not hasattr(env, "current_path_index_2"):
+    ref = env.reference_path_2_center
+    if ref.numel() == 0:
         return torch.zeros((N, 3), device=device)
+    idx = torch.clamp(env.current_path_index_2, 0, ref.shape[1] - 1)
 
-    ref_path = env.reference_path_2
-    path_idx = env.current_path_index_2
-    if ref_path.numel() == 0 or torch.all(ref_path == 0):
-        return torch.zeros(N, 3, device=device)
-    max_step = max(ref_path.shape[1] - 1, 0)
-    safe_idx = torch.clamp(path_idx, min=0, max=max_step)
+    ee = ee_contact_point_world(env.scene["ee_1_frame"], device)  # (N,3)
+    tgt = ref[torch.arange(N, device=device), idx]                # (N,3)
+    if not hasattr(env, "mode_flags"): get_mode_flags(env)
+    mask1 = (env.mode_flags == 1).unsqueeze(-1)
+    vec = tgt - ee
+    return torch.where(mask1, vec, torch.zeros_like(vec))
 
-    ref_yellow = ref_path[torch.arange(N, device=device), safe_idx]
+def blue_to_arc_path(env) -> torch.Tensor:
+    device, N = env.device, env.num_envs
+    if (not hasattr(env, "reference_path_2_blue")) or (not hasattr(env, "current_path_index_2")):
+        return torch.zeros((N, 3), device=device)
+    ref = env.reference_path_2_blue
+    if ref.numel() == 0:
+        return torch.zeros((N, 3), device=device)
+    idx = torch.clamp(env.current_path_index_2, 0, ref.shape[1] - 1)
 
-    # Direction vector to current target
-    vec_to_path = ref_yellow - yellow_tip  # (N,3)
+    ee_f = env.scene["ee_1_frame"]
+    ee = ee_contact_point_world(ee_f, device)
+    R = quat_to_rot_matrix(ee_f.data.target_quat_w[..., 0, :])
+    blue_tip = ee + torch.bmm(R, torch.tensor([0.0045, 0.0, 0.0], device=device).expand(N,3).unsqueeze(-1)).squeeze(-1)
 
-    return vec_to_path
+    tgt = ref[torch.arange(N, device=device), idx]
+    if not hasattr(env, "mode_flags"): get_mode_flags(env)
+    mask1 = (env.mode_flags == 1).unsqueeze(-1)
+    vec = tgt - blue_tip
+    return torch.where(mask1, vec, torch.zeros_like(vec))
+
+def yellow_to_arc_path(env) -> torch.Tensor:
+    device, N = env.device, env.num_envs
+    if (not hasattr(env, "reference_path_2_yellow")) or (not hasattr(env, "current_path_index_2")):
+        return torch.zeros((N, 3), device=device)
+    ref = env.reference_path_2_yellow
+    if ref.numel() == 0:
+        return torch.zeros((N, 3), device=device)
+    idx = torch.clamp(env.current_path_index_2, 0, ref.shape[1] - 1)
+
+    ee_f = env.scene["ee_1_frame"]
+    ee = ee_contact_point_world(ee_f, device)
+    R = quat_to_rot_matrix(ee_f.data.target_quat_w[..., 0, :])
+    yellow_tip = ee + torch.bmm(R, torch.tensor([-0.0045, 0.0, 0.0], device=device).expand(N,3).unsqueeze(-1)).squeeze(-1)
+
+    tgt = ref[torch.arange(N, device=device), idx]
+    if not hasattr(env, "mode_flags"): get_mode_flags(env)
+    mask1 = (env.mode_flags == 1).unsqueeze(-1)
+    vec = tgt - yellow_tip
+    return torch.where(mask1, vec, torch.zeros_like(vec))
+
+# def blue_to_path_2(env) -> torch.Tensor:
+#     device = env.device
+#     N = env.num_envs
+
+#     ee_frame = env.scene["ee_1_frame"]
+#     ee_center = ee_contact_point_world(ee_frame, device)
+#     grip_quat = ee_frame.data.target_quat_w[..., 0, :]
+#     grip_rot = quat_to_rot_matrix(grip_quat)
+#     blue_tip = ee_center + torch.bmm(
+#         grip_rot,
+#         torch.tensor([0.0045, 0.0, 0.0], device=device).expand(N, 3).unsqueeze(-1)
+#     ).squeeze(-1)
+
+#     if not hasattr(env, "reference_path_2") or not hasattr(env, "current_path_index_2"):
+#         return torch.zeros((N, 3), device=device)
+
+#     ref_path = env.reference_path_2
+#     path_idx = env.current_path_index_2
+#     if ref_path.numel() == 0 or torch.all(ref_path == 0):
+#         return torch.zeros(N, 3, device=device)
+#     max_step = max(ref_path.shape[1] - 1, 0)
+#     safe_idx = torch.clamp(path_idx, min=0, max=max_step)
+
+#     ref_blue = ref_path[torch.arange(N, device=device), safe_idx]
+
+#     # Direction vector to current target
+#     vec_to_path = ref_blue - blue_tip  # (N,3)
+
+#     return vec_to_path
 
 
-def tip_to_path_obs(env) -> torch.Tensor:
-    device = env.device
-    N = env.num_envs
+# def yellow_to_path_2(env) -> torch.Tensor:
+#     device = env.device
+#     N = env.num_envs
 
-    # compute blue and yellow vectors
-    blue_vec = blue_to_path_2(env)    # (N,3)
-    yellow_vec = yellow_to_path_2(env)  # (N,3)
+#     ee_frame = env.scene["ee_1_frame"]
+#     ee_center = ee_contact_point_world(ee_frame, device)
+#     grip_quat = ee_frame.data.target_quat_w[..., 0, :]
+#     grip_rot = quat_to_rot_matrix(grip_quat)
+#     yellow_tip = ee_center + torch.bmm(
+#         grip_rot,
+#         torch.tensor([-0.0045, 0.0, 0.0], device=device).expand(N, 3).unsqueeze(-1)
+#     ).squeeze(-1)
 
-    # ensure side flag exists: +1 means use blue, -1 means use yellow
-    if not hasattr(env, "needle_side_flag"):
-        env.needle_side_flag = torch.zeros(N, dtype=torch.long, device=device)
-    side_flag = env.needle_side_flag  # (N,)
+#     if not hasattr(env, "reference_path_2") or not hasattr(env, "current_path_index_2"):
+#         return torch.zeros((N, 3), device=device)
 
-    use_blue = (side_flag == 1).unsqueeze(-1)   # (N,1)
-    use_yellow = (side_flag == -1).unsqueeze(-1)  # (N,1)
+#     ref_path = env.reference_path_2
+#     path_idx = env.current_path_index_2
+#     if ref_path.numel() == 0 or torch.all(ref_path == 0):
+#         return torch.zeros(N, 3, device=device)
+#     max_step = max(ref_path.shape[1] - 1, 0)
+#     safe_idx = torch.clamp(path_idx, min=0, max=max_step)
 
-    # masked selection: only the relevant tip vector passes through
-    active_vec = blue_vec * use_blue + yellow_vec * use_yellow  # (N,3)
+#     ref_yellow = ref_path[torch.arange(N, device=device), safe_idx]
 
-    return active_vec
+#     # Direction vector to current target
+#     vec_to_path = ref_yellow - yellow_tip  # (N,3)
+
+#     return vec_to_path
+
+
+# def center_to_path_2(env) -> torch.Tensor:
+#     device = env.device
+#     N = env.num_envs
+
+#     # EE center in world
+#     ee_frame = env.scene["ee_1_frame"]
+#     ee_center = ee_contact_point_world(ee_frame, device)  # (N,3)
+
+#     # Current arc-path target
+#     if not hasattr(env, "reference_path_2") or not hasattr(env, "current_path_index_2"):
+#         return torch.zeros((N, 3), device=device)
+#     ref_path = env.reference_path_2
+#     if ref_path.numel() == 0:
+#         return torch.zeros((N, 3), device=device)
+
+#     idx = torch.clamp(env.current_path_index_2, min=0, max=ref_path.shape[1] - 1)
+#     ref_center = ref_path[torch.arange(N, device=device), idx]  # (N,3)
+
+#     return ref_center - ee_center
+
+
+# def tip_to_path_obs(env) -> torch.Tensor:
+#     device = env.device
+#     N = env.num_envs
+
+#     # compute blue and yellow vectors
+#     blue_vec = blue_to_path_2(env)    # (N,3)
+#     yellow_vec = yellow_to_path_2(env)  # (N,3)
+
+#     # ensure side flag exists: +1 means use blue, -1 means use yellow
+#     if not hasattr(env, "needle_side_flag"):
+#         env.needle_side_flag = torch.zeros(N, dtype=torch.long, device=device)
+#     side_flag = env.needle_side_flag  # (N,)
+
+#     use_blue = (side_flag == 1).unsqueeze(-1)   # (N,1)
+#     use_yellow = (side_flag == -1).unsqueeze(-1)  # (N,1)
+
+#     # masked selection: only the relevant tip vector passes through
+#     active_vec = blue_vec * use_blue + yellow_vec * use_yellow  # (N,3)
+
+#     return active_vec
 
 
 def phase_flags_observation(env) -> torch.BoolTensor:
@@ -341,47 +409,51 @@ def phase_flags_observation(env) -> torch.BoolTensor:
 #     return vec_to_path
 
 
-# def goal_observation(env) -> torch.Tensor:
-#     """
-#     Returns goal-related observations for each environment:
-#     - Relative vector (goal - needle_center)  (N, 3)
-#     - Distance to goal                       (N, 1)
+def goal_observation(env) -> torch.Tensor:
+    """
+    Returns goal-related observations for each environment:
+    - Relative vector (goal - needle_center)  (N, 3)
+    - Distance to goal                        (N, 1)
     
-#     Can be concatenated with other obs.
-#     """
-#     device = env.device
-#     N = env.num_envs
-#     needle = env.scene["object"]
-#     needle_pos = needle.data.root_pos_w
-#     needle_quat = needle.data.root_quat_w
-#     needle_rot = quat_to_rot_matrix(needle_quat)
-#     contact_center = _contact_point_world(needle_pos, needle_quat, device)
+    Uses env.goal_point (randomized per reset).
+    """
+    device = env.device
+    N = env.num_envs
 
-#     offset_local = torch.tensor([0.0005, 0.001, 0.0], device=device).expand(N, 3)
-#     offset_world = torch.bmm(needle_rot, offset_local.unsqueeze(-1)).squeeze(-1)
-#     needle_center = contact_center + offset_world
-    
-#     # Fixed goal point (can be parameterized later)
-#     goal_point = torch.tensor([-0.1863, 0.1419, 0.1296], device=device).expand(N, 3)
+    # --- Needle center ---
+    needle = env.scene["object"]
+    needle_pos = needle.data.root_pos_w
+    needle_quat = needle.data.root_quat_w
+    needle_rot = quat_to_rot_matrix(needle_quat)
+    contact_center = _contact_point_world(needle_pos, needle_quat, device)
 
-#     if not hasattr(env, "mode_flags"):
-#         get_mode_flags(env)  # create if not exists
-#     phase_mask = (env.mode_flags == 1)
-    
-#     # Relative vector and distance
-#     goal_vec = goal_point - needle_center                  # (N, 3)
-#     goal_dist = torch.norm(goal_vec, dim=1, keepdim=True)  # (N, 1)
-    
-#     # Concatenate into one tensor (N, 4)
-#     goal_obs = torch.cat([goal_vec, goal_dist], dim=1)
+    offset_local = torch.tensor([0.0005, 0.001, 0.0], device=device).expand(N, 3)
+    offset_world = torch.bmm(needle_rot, offset_local.unsqueeze(-1)).squeeze(-1)
+    needle_center = contact_center + offset_world
 
-#     goal_obs = torch.where(
-#         phase_mask.unsqueeze(-1),
-#         goal_obs,
-#         torch.zeros_like(goal_obs)
-#     )
+    # --- Randomized goal (set by reset_goal_point_about_pivot_xz) ---
+    if not hasattr(env, "goal_point"):
+        reset_goal_about_pivot_xz(env)     # creates env.goal_point on first call
+    goal_point = env.goal_point  # (N, 3)
 
-#     return goal_obs
+    # --- Phase gating (only active in phase 1) ---
+    if not hasattr(env, "mode_flags"):
+        get_mode_flags(env)  # ensure exists
+    phase_mask = (env.mode_flags == 1)
+
+    # --- Compute relative vector and distance ---
+    goal_vec = goal_point - needle_center                   # (N, 3)
+    goal_dist = torch.norm(goal_vec, dim=1, keepdim=True)   # (N, 1)
+    goal_obs = torch.cat([goal_vec, goal_dist], dim=1)      # (N, 4)
+
+    # Zero out when not in phase 1
+    goal_obs = torch.where(
+        phase_mask.unsqueeze(-1),
+        goal_obs,
+        torch.zeros_like(goal_obs)
+    )
+
+    return goal_obs
 
 
 def current_mode_onehot(env) -> torch.Tensor:
@@ -407,26 +479,29 @@ def current_mode_onehot(env) -> torch.Tensor:
 
 def needle_side_onehot(env) -> torch.Tensor:
     """
-    Returns a one-hot encoded tensor indicating which side of the goal the needle is on:
-    [left_of_goal, right_of_goal] -> shape: (N, 2)
+    Returns a one-hot encoded tensor indicating which side the GOAL is on 
+    relative to the needle:
+    [goal_left_of_needle, goal_right_of_needle] -> shape: (N, 2)
     """
     N = env.num_envs
     device = env.device
 
-    # Get needle center
+    # Needle center (world position)
     needle = env.scene["object"]
     needle_pos = needle.data.root_pos_w  # (N, 3)
 
-    # Define the fixed goal point
-    goal_point = torch.tensor([-0.1863, 0.1419, 0.1296], device=device).expand(N, 3)
+    # Randomized goal point
+    if not hasattr(env, "goal_point"):
+        reset_goal_about_pivot_xz(env)     # creates env.goal_point on first call
+    goal_point = env.goal_point  # (N, 3)
 
-    # Compute relative Y difference
-    y_diff = needle_pos[:, 1] - goal_point[:, 1]  # (N,)
+    # Compute Y difference (goal - needle)
+    y_diff = goal_point[:, 1] - needle_pos[:, 1]  # (N,)
 
-    # side_flag: 0 if left_of_goal, 1 if right_of_goal
-    side_flag = (y_diff > 0.0).long()
+    # side_flag: 0 if goal is LEFT (+Y), 1 if goal is RIGHT (-Y)
+    side_flag = (y_diff < 0.0).long()
 
-    # One-hot encode into [left, right]
+    # One-hot encode: [left, right]
     return torch.nn.functional.one_hot(side_flag, num_classes=2).float()
 
 
@@ -438,13 +513,13 @@ def tip_to_path_distances(env) -> torch.Tensor:
     N = env.num_envs
     device = env.device
     
-    # Current path target
-    if not hasattr(env, "current_path_index_2"):
-        env.current_path_index_2 = torch.zeros(N, dtype=torch.long, device=device)
-    if not hasattr(env, "reference_path_2"):
-        env.reference_path_2 = torch.zeros((N, 3, 3), device=device)  # 3 steps default
-    idx = torch.clamp(env.current_path_index_2, max=env.reference_path_2.shape[1] - 1)
-    ref_center = env.reference_path_2[torch.arange(N), idx]
+    if (not hasattr(env, "current_path_index_2")) or (not hasattr(env, "reference_path_2")):
+        return torch.zeros((N, 2), device=device)
+    ref_path = env.reference_path_2
+    if ref_path.numel() == 0:
+        return torch.zeros((N, 2), device=device)
+    idx = torch.clamp(env.current_path_index_2, max=ref_path.shape[1] - 1)
+    ref_center = ref_path[torch.arange(N), idx]
 
     # EE center & tip positions
     ee_frame = env.scene["ee_1_frame"]

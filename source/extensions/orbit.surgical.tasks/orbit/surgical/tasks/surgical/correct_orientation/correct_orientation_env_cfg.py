@@ -19,7 +19,7 @@ from isaaclab.utils import configclass
 
 from . import mdp
 from .mdp.phased_orientation_reward_wrapper import PhasedOrientationCMORewardWrapper
-from .mdp.joint_utils import setup_needle_pivot_joint, teardown_needle_pivot_joint
+from .mdp.joint_utils import setup_needle_pivot_joint, teardown_needle_pivot_joint, update_hinge_targets_after_reset
 
 
 @configclass
@@ -37,7 +37,7 @@ class ObjectTableSceneCfg(InteractiveSceneCfg):
     ee_1_gripper_left: FrameTransformerCfg = MISSING
     ee_1_gripper_right: FrameTransformerCfg = MISSING
     # target object: will be populated by agent env cfg
-    needle_pivot_xform: AssetBaseCfg = MISSING
+    needle_pivot_xform: RigidObjectCfg = MISSING
     object: RigidObjectCfg = MISSING
 
     # Table
@@ -88,7 +88,7 @@ class CommandsCfg:
         resampling_time_range=(0.0, 0.0),
         debug_vis=False,
         asset_name="object",
-        body_name="Object",  # <-- This avoids the call to .find_bodies()
+        body_name="Needle",  # <-- This avoids the call to .find_bodies()
         make_quat_unique=False,
         ranges=mdp.UniformPoseCommandCfg.Ranges(
             pos_x=(-0.1976, -0.1976),  # Pivot position
@@ -141,7 +141,20 @@ class ObservationsCfg:
             func=mdp.yellow_to_path
         )
 
-        path2 = ObsTerm(func=mdp.tip_to_path_obs)
+        # How center ee point aligns with path until current index == 8 (second to last)
+        center_path_2 = ObsTerm(
+            func=mdp.center_to_arc_path
+        )
+
+        # How blue ee point aligns with path until current index == 8 (second to last)
+        blue_path_2 = ObsTerm(
+            func=mdp.blue_to_arc_path
+        )
+
+        # How yellow ee point aligns with path until current index == 8 (second to last)
+        yellow_path_2 = ObsTerm(
+            func=mdp.yellow_to_arc_path
+        )
 
         phase = ObsTerm(
             func=mdp.phase_flags_observation
@@ -175,23 +188,33 @@ class EventCfg:
     """Configuration for events."""
     reset_all = EventTerm(func=mdp.reset_only_robot1, mode="reset")
 
+    reset_mode_flags = EventTerm(func=mdp.reset_mode_flags, mode="reset")
+
+    # teardown_pivot_joint = EventTerm(
+    #     func=teardown_needle_pivot_joint,
+    #     mode="reset",    # destroy on every reset so frames rebuild after randomization
+    # )
+
     reset_object_position = EventTerm(
         func=mdp.reset_needle_about_pivot_xz,
         mode="reset",
     )
-
-    reset_mode_flags = EventTerm(func=mdp.reset_mode_flags, mode="reset")
 
     # --- NEW: D6 pivot joint lifecycle ---
     setup_pivot_joint = EventTerm(
         func=setup_needle_pivot_joint,
         mode="reset",  # create once when envs come up
     )
-    teardown_pivot_joint = EventTerm(
-        func=teardown_needle_pivot_joint,
-        mode="reset",    # destroy on every reset so frames rebuild after randomization
+
+    update_hinge_targets = EventTerm(
+        func=update_hinge_targets_after_reset,
+        mode="reset",
     )
 
+    reset_goal_point = EventTerm(
+        func=mdp.reset_goal_about_pivot_xz,
+        mode="reset",
+    )
 
 
 @configclass
@@ -217,9 +240,9 @@ class TerminationsCfg:
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    object_dropping = DoneTerm(
-        func=mdp.root_height_below_minimum, params={"minimum_height": -0.05, "asset_cfg": SceneEntityCfg("object")}
-    )
+    # object_dropping = DoneTerm(
+    #     func=mdp.root_height_below_minimum, params={"minimum_height": -0.05, "asset_cfg": SceneEntityCfg("object")}
+    # )
 
     # needle_fell = DoneTerm(
     #     func=mdp.needle_below_table,
@@ -243,15 +266,13 @@ class CurriculumCfg:
 @configclass
 class PivotJointCfg:
     """
-    Configuration for pinning the needle to the pivot.  Besides the joint
-    type (weld or hinge) and the axis selection this class also exposes
-    `anchor_offset_local` so that the anchor point used by the joint can be
-    customised.  When left as ``None`` the offset will be taken from the
-    needle's spawn pose relative to the pivot.
+    Configuration for pinning the needle to the pivot. ...
     """
-    mode: str = "HINGE"           # "WELD" or "HINGE"
-    hinge_axis: str = "needle_x"  # "world_x|y|z" or "needle_x|y|z"
-    anchor_offset_local: tuple[float, float, float] | None = None
+    mode: str = "HINGE"            # "WELD" or "HINGE"
+    hinge_axis: str = "needle_x"   # "world_x|y|z" or "needle_x|y|z"
+    # --- SINGLE SOURCE OF TRUTH (used by reset + joint):
+    anchor_offset_local: tuple[float, float, float] | None = (0.0, 0.0, 0.0)
+    anchor_frame: str = "needle"    # "pivot" or "needle"
 
 
 @configclass

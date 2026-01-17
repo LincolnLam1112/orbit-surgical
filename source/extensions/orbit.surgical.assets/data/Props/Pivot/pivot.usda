@@ -6,10 +6,17 @@
 )
 
 
-def Xform "Pivot" {
-    def Sphere "Visual" {
+def Xform "Pivot" (
+    apiSchemas = ["PhysicsRigidBodyAPI", "PhysxRigidBodyAPI"]
+)
+{
+    bool physics:rigidBodyEnabled = 1
+    bool physics:kinematicEnabled = 1
+    float physics:mass = 0.001
+
+    def Sphere "Visual" (
+        apiSchemas = ["PhysicsCollisionAPI", "PhysxCollisionAPI"]
+    ) {
         float radius = 0.01
-        uniform token[] xformOpOrder = ["xformOp:transform"]
-        matrix4d xformOp:transform = ( (1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1) )
     }
 }

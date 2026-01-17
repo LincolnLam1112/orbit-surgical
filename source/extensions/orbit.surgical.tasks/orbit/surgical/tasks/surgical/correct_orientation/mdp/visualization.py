@@ -2,6 +2,7 @@ import torch
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 import isaaclab.sim as sim_utils
 from typing import Union
+from isaacsim.core.utils.prims import delete_prim
 
 
 def quat_to_rot_matrix(quat):
@@ -241,8 +242,8 @@ def visualize_needle_contact_left_right(env, env_ids=None):
     contact_frame = _contact_point_world(needle_pos, needle_quat, env.device)
     rot_matrix = quat_to_rot_matrix(needle_quat)
 
-    contact_blue_offset = torch.tensor([0.0, 0.0, 0.0045], device=env.device).expand(N, 3)
-    contact_yellow_offset = torch.tensor([0.0, 0.0, -0.0045], device=env.device).expand(N, 3)
+    contact_blue_offset = torch.tensor([-0.025, 0.0, 0.0045], device=env.device).expand(N, 3)
+    contact_yellow_offset = torch.tensor([-0.025, 0.0, -0.0045], device=env.device).expand(N, 3)
 
     contact_blue_world = contact_frame + torch.bmm(rot_matrix, contact_blue_offset.unsqueeze(-1)).squeeze(-1)
     contact_yellow_world = contact_frame + torch.bmm(rot_matrix, contact_yellow_offset.unsqueeze(-1)).squeeze(-1)
@@ -285,7 +286,7 @@ def visualize_needle_center_contact(env, env_ids=None):
     needle_rot = quat_to_rot_matrix(needle_quat)  # (N, 3, 3)
 
     # Offset slightly upward in needle's local Z direction
-    offset_local = torch.tensor([0.0005, 0.001, 0.0], device=device).expand(N, 3)
+    offset_local = torch.tensor([-0.025, 0.001, 0.0], device=device).expand(N, 3)
     offset_world = torch.bmm(needle_rot, offset_local.unsqueeze(-1)).squeeze(-1)
 
     contact_center_above = contact_center + offset_world
@@ -309,18 +310,18 @@ goal_marker_cfg = VisualizationMarkersCfg(
 goal_marker = VisualizationMarkers(goal_marker_cfg)
 
 
-def visualize_goal_point(env, env_ids=None):
-    """Visualizes the fixed goal position in world space."""
-    ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
-    N = ids.numel()
+# def visualize_goal_point(env, env_ids=None):
+#     """Visualizes the fixed goal position in world space."""
+#     ids = torch.arange(env.num_envs, device=env.device) if env_ids is None else env_ids
+#     N = ids.numel()
 
-    # Fixed world position (goal point)
-    goal_world = torch.tensor([-0.1863, 0.1419, 0.1296], device=env.device).expand(N, 3)
+#     # Fixed world position (goal point)
+#     goal_world = torch.tensor([-0.1863, 0.1419, 0.1296], device=env.device).expand(N, 3)
 
-    goal_marker.visualize(
-        marker_indices=torch.zeros(N, dtype=torch.long),
-        translations=goal_world.cpu().numpy()
-    )
+#     goal_marker.visualize(
+#         marker_indices=torch.zeros(N, dtype=torch.long),
+#         translations=goal_world.cpu().numpy()
+#     )
 
 
 needle_contact_marker_cfg = VisualizationMarkersCfg(
@@ -465,27 +466,107 @@ def visualize_gripper_links(env, env_ids=None):
     tip_marker.visualize(marker_indices=marker_ids, translations=tip_pos.cpu().numpy())
 
 
-def visualize_reference_path_2(env):
-    if not hasattr(env, "reference_path_2"):
-        print("No reference_path_2 found")
+def visualize_reference_path_2(env, env_id: int = 0, which=("arc_center", "arc_blue", "arc_yellow")):
+    """
+    Visualize Phase-1 arc paths for a single env.
+    Pass `which` as:
+      - "arc_center" or ("arc_center",)
+      - "arc_blue"   or ("arc_blue",)
+      - "arc_yellow" or ("arc_yellow",)
+      - any combo, e.g. ("arc_center","arc_blue")
+    """
+    # normalize input
+    if isinstance(which, str):
+        which = (which,)
+
+    # gather paths
+    paths = {}
+    steps = None
+    if "arc_center" in which and hasattr(env, "reference_path_2_center") and env.reference_path_2_center.numel() > 0:
+        paths["arc_center"] = env.reference_path_2_center[env_id].detach().cpu()
+        steps = env.reference_path_2_center.shape[1]
+    if "arc_blue" in which and hasattr(env, "reference_path_2_blue") and env.reference_path_2_blue.numel() > 0:
+        paths["arc_blue"] = env.reference_path_2_blue[env_id].detach().cpu()
+        steps = steps or env.reference_path_2_blue.shape[1]
+    if "arc_yellow" in which and hasattr(env, "reference_path_2_yellow") and env.reference_path_2_yellow.numel() > 0:
+        paths["arc_yellow"] = env.reference_path_2_yellow[env_id].detach().cpu()
+        steps = steps or env.reference_path_2_yellow.shape[1]
+
+    if not paths or steps is None:
+        print("[viz] No Phase-1 reference paths to visualize.")
         return
 
-    path_2 = env.reference_path_2[0]
+    # clean only selected prefixes
+    for prefix in which:
+        for i in range(steps):
+            delete_prim(f"/Visuals/PathDotStep_{prefix}_{i}")
 
-    for i in range(3):
-        cfg_orient = VisualizationMarkersCfg(
-            prim_path=f"/Visuals/PathDotStep_orient_{i}",
-            markers={
-                "sphere": sim_utils.SphereCfg(
-                    radius=0.0005,
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.8 - i * 0.2, 0.2 + i * 0.3, 0.5)
+    palette = {
+        "arc_center": (0.2, 0.8, 0.3),
+        "arc_blue":   (0.2, 0.4, 0.9),
+        "arc_yellow": (0.9, 0.8, 0.2),
+    }
+
+    for prefix, pts in paths.items():
+        base_color = palette.get(prefix, (0.8, 0.2, 0.5))
+        for i in range(steps):
+            cfg = VisualizationMarkersCfg(
+                prim_path=f"/Visuals/PathDotStep_{prefix}_{i}",
+                markers={
+                    "sphere": sim_utils.SphereCfg(
+                        radius=0.0005,
+                        visual_material=sim_utils.PreviewSurfaceCfg(
+                            diffuse_color=(
+                                max(0.0, min(1.0, base_color[0] - 0.15 * i)),
+                                max(0.0, min(1.0, base_color[1] + 0.05 * i)),
+                                max(0.0, min(1.0, base_color[2]))
+                            )
+                        ),
                     )
-                )
-            }
-        )
-        marker_orient = VisualizationMarkers(cfg_orient)
-        marker_orient.visualize(
-            marker_indices=torch.zeros(1, dtype=torch.long),
-            translations=path_2[i].cpu().unsqueeze(0).numpy()
-        )
+                },
+            )
+            VisualizationMarkers(cfg).visualize(
+                marker_indices=torch.zeros(1, dtype=torch.long),
+                translations=pts[i].unsqueeze(0).numpy(),
+            )
+
+def visualize_fixed_point(env):
+    point = torch.tensor([-0.21, 0.1419, 0.065])  # hard-coded world coordinate
+
+    cfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/FixedPoint",
+        markers={
+            "sphere": sim_utils.SphereCfg(
+                radius=0.001,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.9, 0.1, 0.3))
+            )
+        }
+    )
+    marker = VisualizationMarkers(cfg)
+    marker.visualize(
+        marker_indices=torch.zeros(1, dtype=torch.long),
+        translations=point.cpu().unsqueeze(0).numpy()
+    )
+
+def visualize_goal_point(env):
+    if not hasattr(env, "goal_point"):
+        print("No goal_point found in env")
+        return
+
+    # visualize the first env’s goal (or loop if you want all)
+    point = env.goal_point[0].detach().cpu()
+
+    cfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/GoalPoint",
+        markers={
+            "sphere": sim_utils.SphereCfg(
+                radius=0.001,
+                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 0.9, 0.3))
+            )
+        }
+    )
+    marker = VisualizationMarkers(cfg)
+    marker.visualize(
+        marker_indices=torch.zeros(1, dtype=torch.long),
+        translations=point.unsqueeze(0).numpy()
+    )

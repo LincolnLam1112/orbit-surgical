@@ -109,7 +109,7 @@ def main():
     device = env.unwrapped.device
 
     # metrics containers
-    warmup_episodes = 15  # skip first 3 episodes per env before evaluation
+    warmup_episodes = 3  # skip first 3 episodes per env before evaluation
     reach_success  = torch.zeros(num_envs, dtype=torch.bool, device=device)
     orient_success = torch.zeros(num_envs, dtype=torch.bool, device=device)
     running_mask   = torch.ones(num_envs, dtype=torch.bool, device=device)
@@ -139,12 +139,14 @@ def main():
 
             contact_center_prev = _contact_point_world(needle_center_prev, needle_quat_prev, needle_center_prev.device)
             needle_rot_prev = quat_to_rot_matrix(needle_quat_prev)
-            offset_local = torch.tensor([0.0005, 0.001, 0.0], device=needle_center_prev.device).expand(N, 3)
+            offset_local = torch.tensor([-0.025, 0.0, 0.0], device=needle_center_prev.device).expand(N, 3)
             offset_world = torch.bmm(needle_rot_prev, offset_local.unsqueeze(-1)).squeeze(-1)
             needle_center_prev = contact_center_prev + offset_world
-
+            
             # per-env goal: compute goal location using environment origins for consistent spacing
-            if hasattr(raw_env.scene, "env_origins"):
+            if hasattr(raw_env, "goal_point"):
+                goal_point = raw_env.goal_point
+            elif hasattr(raw_env.scene, "env_origins"):
                 goal_point = raw_env.scene.env_origins + torch.tensor([-0.1863, 0.1419, 0.1296], device=device)
             else:
                 # fallback to original spacing-based heuristic
@@ -177,9 +179,16 @@ def main():
                 for env_id in done_idx:
                     if episode_counter_per_env[env_id] <= warmup_episodes:
                         continue
-                    reach_success[env_id] = (prev_reached[env_id] == 1)
-                    orient_success[env_id] = (prev_orient[env_id] == 1)
-                    running_mask[env_id] = False
+
+                    # --- SUCCESS DECISION (use pre-step flags, plus geometric fallback for reach) ---
+                    reach  = (prev_reached[env_id] == 1) 
+                    # or (dist_to_goal_prev[env_id] < 0.020)  # 2 cm reach fallback
+                    orient = reach and (prev_orient[env_id] == 1) 
+                                        # or (dist_to_goal_prev[env_id] < 0.004))  # 4 mm orient
+
+                    reach_success[env_id]  = reach
+                    orient_success[env_id] = orient
+                    running_mask[env_id]   = False
                 # stop when all envs have been evaluated once beyond warmup
                 if not running_mask.any():
                     break

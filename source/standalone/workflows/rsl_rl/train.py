@@ -67,6 +67,12 @@ torch.backends.cudnn.benchmark = False
 
 
 def main():
+    import carb
+    try:
+        carb.logging.set_channel_level("omni.physx.plugin", carb.logging.LEVEL_ERROR)
+    except Exception:
+        pass
+
     """Train with RSL-RL agent."""
     # parse configuration
     env_cfg: ManagerBasedRLEnvCfg = parse_env_cfg(

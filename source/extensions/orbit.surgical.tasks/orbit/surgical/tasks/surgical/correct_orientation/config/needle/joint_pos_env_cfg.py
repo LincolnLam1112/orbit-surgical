@@ -37,7 +37,7 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
 
         # Set PSM as robot
         self.scene.robot_1 = PSM_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot_1")
-        self.scene.robot_1.init_state.pos = (-0.075, 0.15, 0.22)
+        self.scene.robot_1.init_state.pos = (0.12, 0.0, 0.2)
         self.scene.robot_1.init_state.rot = (0.7071, 0.0, 0.0, -0.7071)
 
         # Set the initial joint positions for the robot
@@ -62,6 +62,7 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
                 "psm_tool_yaw_joint",
             ],
             scale=0.35,
+            # scale=0.0,
             use_default_offset=True,
         )
         self.actions.finger_1_joint_pos = mdp.JointPositionActionCfg(
@@ -79,8 +80,10 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
             prim_path="{ENV_REGEX_NS}/NeedlePivot",
             init_state=RigidObjectCfg.InitialStateCfg(
                 # pos=(-0.200, 0.1435, 0.1505),
-                pos=(-0.2, 0.1435, 0.05),
-                rot=(1.0, 0.0, 0.0, 0.0),
+                # pos=(-0.2, 0.1435, 0.1),
+                # pos=(0.0, 0.0, 0.1),
+                pos=(0.0, 0.0, 0.1),
+                rot=(0.7071, 0.7071, 0.0, 0.0),
             ),
             spawn=UsdFileCfg(
                 usd_path=f"{ORBITSURGICAL_ASSETS_DATA_DIR}/Props/Pivot/pivot.usda",
@@ -96,19 +99,17 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
             ),
         )
 
-        # Dynamic needle attached as a child of the pivot
-        # The damping values are deliberately kept small so that the hinge
-        # rotation is unimpeded.  The solver iteration counts are also
-        # reduced from 16/8 to 4/1 for efficiency.
+        # NEEDLE: move out from under the pivot
         self.scene.object = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/NeedlePivot/Object",
+            prim_path="{ENV_REGEX_NS}/Needle",   # ← was {ENV_REGEX_NS}/NeedlePivot/Object
             init_state=RigidObjectCfg.InitialStateCfg(
-                pos=(0.007, 0.0, -0.01),
+                # Initial pose can be anything; your reset will place it relative to the pivot.
+                pos=(0.0, 0.0, 0.0),
                 rot=(1.0, 0.0, 0.0, 0.0),
             ),
             spawn=UsdFileCfg(
                 usd_path=f"{ORBITSURGICAL_ASSETS_DATA_DIR}/Props/Surgical_needle/needle_sdf.usda",
-                scale=(500.0, 500.0, 500.0),
+                scale=(0.5, 0.5, 0.5),
                 rigid_props=RigidBodyPropertiesCfg(
                     solver_position_iteration_count=16,
                     solver_velocity_iteration_count=8,
@@ -117,40 +118,40 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
                     max_depenetration_velocity=0.2,
                     linear_damping=0.5,
                     angular_damping=150.0,
-                    kinematic_enabled=False,     # ← add this
-                    disable_gravity=False,
+                    kinematic_enabled=False,
+                    disable_gravity=True,
                 ),
             ),
             debug_vis=False,
         )
 
-        # Debug frame on the needle for visualization
+        # DEBUG FRAME: update to new needle path
         needle_marker_cfg = FRAME_MARKER_CFG.copy()
         needle_marker_cfg.markers["frame"].scale = (0.01, 0.01, 0.01)
         needle_marker_cfg.prim_path = "/Visuals/NeedleFrameTransformer"
         self.scene.needle_debug = FrameTransformerCfg(
-            prim_path="{ENV_REGEX_NS}/NeedlePivot/Object",
+            prim_path="{ENV_REGEX_NS}/Needle",     # ← was .../NeedlePivot/Object
             debug_vis=True,
             visualizer_cfg=needle_marker_cfg,
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
-                    prim_path="{ENV_REGEX_NS}/NeedlePivot/Object",
+                    prim_path="{ENV_REGEX_NS}/Needle",  # ← was .../NeedlePivot/Object
                     name="needle_debug",
                     offset=OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(1.0, 0.0, 0.0, 0.0)),
                 )
             ],
         )
 
-        # Visual marker on the pivot (not simulated)
-        self.scene.pivot_marker = AssetBaseCfg(
-            prim_path="{ENV_REGEX_NS}/NeedlePivot/Marker",
-            spawn=UsdFileCfg(
-                usd_path=f"{ORBITSURGICAL_ASSETS_DATA_DIR}/Props/Pivot/pivot.usda",
-                scale=(0.001, 0.001, 0.001),
-                rigid_props=None,
-            ),
-            debug_vis=True,
-        )
+        # # PIVOT MARKER stays under pivot but must remain NON-rigid (you already set rigid_props=None)
+        # self.scene.pivot_marker = AssetBaseCfg(
+        #     prim_path="{ENV_REGEX_NS}/NeedlePivot/Marker",
+        #     spawn=UsdFileCfg(
+        #         usd_path=f"{ORBITSURGICAL_ASSETS_DATA_DIR}/Props/Pivot/pivot.usda",
+        #         scale=(0.001, 0.001, 0.001),
+        #         rigid_props=None,  # keep visual-only
+        #     ),
+        #     debug_vis=True,
+        # )
 
         # Visual frame on the pivot for debugging
         pivot_marker_cfg = FRAME_MARKER_CFG.copy()
@@ -199,7 +200,8 @@ class NeedleOrientationEnvCfg(CorrOrientationEnvCfg):
         # the needle spawn.  The hinge axis defaults to the needle's local x‑axis.
         self.pivot_joint.mode = "HINGE"
         self.pivot_joint.hinge_axis = "needle_x"
-        self.pivot_joint.anchor_offset_local = (0.007, 0.0, -0.01)
+        self.pivot_joint.anchor_offset_local = (-0.01, 0.047, 0.0)  # 1.5cm along needle's +X
+        self.pivot_joint.anchor_frame = "needle"  # NEW field
 
 
 @configclass
